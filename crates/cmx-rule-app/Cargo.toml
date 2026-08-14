@@ -1,0 +1,33 @@
+[package]
+name = "cmx-rule-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# cmx-rule 的**平台中立应用层**（一芯）：决策存储单例（OnceCell PgDecisionStore）+ 全部 axum
+# handler + 路由表 rule_routes::<S>() + 自持响应信封（resp.rs，不借 cmx-api）+ 租户 scope + 最小认证 +
+# 监控大盘 + OpenAPI。
+#
+# 两壳复用同一核：平台壳 cmx-rule-api（留 cmx-container）调 rule_routes::<CmxAppState>()；独立壳
+# cmx-rule-server（本 workspace）调 rule_routes::<()>()。handler 不绑 State 提取器 → 对任意 S 泛型成立。
+
+[dependencies]
+cmx-rule-model = { workspace = true }
+cmx-rule-feel = { workspace = true }
+cmx-rule-engine = { workspace = true }
+cmx-rule-store-pg = { workspace = true }
+# infra（跨 workspace path 进 cmx-container）
+cmx-database-pg = { workspace = true }
+cmx-core = { workspace = true }
+cmx-web-monitor = { workspace = true }
+
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+tracing = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+utoipa = { workspace = true }

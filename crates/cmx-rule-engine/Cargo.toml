@@ -1,0 +1,18 @@
+[package]
+name = "cmx-rule-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# 决策求值内核：在只读决策表 IR 上求值——逐规则行 unary test（经 cmx-rule-feel）、按 11 命中策略
+# 裁决、产逐节点 trace（含失败归因，超越 GoRules ZEN）。R1 加 gap/overlap 完整性分析；R2 加 JDM
+# 决策图拓扑求值 + 子决策递归。引擎只依赖内核中立契约与 feel 引擎，不认识任何数据库驱动。
+
+[dependencies]
+cmx-rule-model = { workspace = true }
+cmx-rule-feel = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

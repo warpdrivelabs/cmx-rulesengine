@@ -1,0 +1,25 @@
+[package]
+name = "cmx-rule-store-pg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# 规则引擎的 tokio-postgres 持久化实现（DecisionStore 契约的 PG 落地）。
+# 四表（无 RU 运行表，规则决策无长驻状态）：
+#   cmx_rule_definition   —— 决策定义（草稿态，body jsonb）
+#   cmx_rule_release      —— 不可变发布（version + IR 快照 + rev 内容哈希）
+#   cmx_rule_decision_log —— 决策日志/审计（每次求值一条，含 trace jsonb + 失败归因）
+#   cmx_rule_test_case    —— 测试用例（输入/期望，仿真回归）
+# 硬约束（对齐 flow store-pg）：cmx_ 前缀、无外键（索引替代）、DDL 幂等、jsonb 用
+# DataValue::Json(String) 承载、TIMESTAMPTZ 用 DataValue::DateTime。
+
+[dependencies]
+cmx-rule-model = { workspace = true }
+cmx-database-pg = { workspace = true }
+cmx-core = { workspace = true }
+
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "cmx-rule-model"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# 规则引擎的**语义中立内核**：决策表 IR（输入列/输出列/规则行/命中策略）、求值上下文与结果
+# （含逐节点 trace + 失败归因）、决策定义/日志 DTO、驱动无关的 DecisionStore 持久化契约、
+# 决策表完整性（gap/overlap）报告类型。对标 GoRules JDM 与 OMG DMN 决策表语义，按 Rust 习惯重写：
+# 不依赖任何数据库驱动、任何 cmx-* infra，可 wasm / 嵌入式复用（与 cmx-flow-model 同纪律）。
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+# DecisionStore 异步契约
+async-trait = { workspace = true }

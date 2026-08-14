@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cmx-rule-server 配置样例（独立规则引擎微服务）。复制为 rules-server.toml 使用。
+#
+# 框架级字段（host/port/log）由 cmx-web-chassis 解析（RULE_ 前缀环境变量亦可覆盖）。
+# [auth]/[datasource] 两段由 main.rs::apply_toml_env 读出 → 注入 RULE_* 环境变量（env 优先）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 监听地址与端口（避开平台 8080 / flow 8091 / report 8092 / flow-demo 8090,8093）。
+host = "0.0.0.0"
+port = 8094
+
+# 日志（chassis：控制台 CompactFormatter + 滚动文件 JSON）。
+log_dir = "./logs"
+log_level = "info"
+
+[auth]
+# off = 不认证（默认，建 default 租户 scope 放行，单租户零回归）；jwt = 验签。
+mode = "off"
+# jwt_alg = "HS256"
+# jwt_secret = "shared-with-platform-change-me"
+# jwt_tenant_claim = "tenant"
+# jwt_roles_claim = "roles"
+# 服务间 API Key（平台反代注入 X-API-Key）。格式 key:tenant，逗号分隔。
+# api_keys = "cmx_sk_platform_to_rules:default"
+# tenancy = "single"   # single（默认，单库）| multi（per-tenant DB，R3）
+
+[datasource]
+# 规则引擎运行库（决策定义/发布/决策日志/测试用例）。R0 复用 flow 的 fico 库（cmx_rule_* 前缀不冲突）。
+rule_pg_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"

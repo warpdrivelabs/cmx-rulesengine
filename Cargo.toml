@@ -1,0 +1,76 @@
+# cmx-rulesengine —— 独立规则引擎微服务（对标 GoRules ZEN / DMN，参照 cmx-flowengine S0 骨架）。
+#
+# 方案见 docs/cmx-rulesengine-design.md。本 workspace 承载与平台/框架解耦的**决策规则引擎**全部
+# crate（model/feel/engine/def/store-pg，R2 加 dmn/adapters）+ 独立可跑 bin（cmx-rule-server）。
+# 平台适配层 cmx-rule-api 将留在 cmx-container（keep-wired，经跨 workspace 路径引本库 cmx-rule-app）。
+#
+# 依赖策略（与 cmx-flowengine 逐一对齐）：域内 rule crate 纯 path；基础设施（cmx-database-pg /
+# cmx-core / cmx-web-chassis / cmx-web-monitor / cmx-service-base）以 path 复用 cmx-container 的成员
+# crate（它们仍属 cmx-container workspace，对其根解析 workspace=true 与 [patch.nora]，故本库无需
+# nora 私仓、无需把 infra 纳入 members）；外部 crate 走 aliyun 镜像（见 .cargo/config.toml），版本与
+# cmx-container 根对齐以便 Cargo 合一。
+[workspace]
+resolver = "2"
+# members 随实现进度增量加入（离线环境下 cargo 会解析全 workspace，未实现的 crate 会阻断解析）。
+# R0 已实现：内核三 crate。def/store-pg/app/server 待其 Cargo.toml 落地后再取消注释。
+members = [
+    "crates/cmx-rule-model",
+    "crates/cmx-rule-feel",
+    "crates/cmx-rule-engine",
+    "crates/cmx-rule-store-pg",
+    "crates/cmx-rule-app",
+    "crates/cmx-rule-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["skylake@pansoft.com"]
+
+[workspace.dependencies]
+# —— 域内 rule crate（纯 path，不经私仓）——
+cmx-rule-model = { path = "crates/cmx-rule-model", version = "0.1.0" }
+cmx-rule-feel = { path = "crates/cmx-rule-feel", version = "0.1.0" }
+cmx-rule-engine = { path = "crates/cmx-rule-engine", version = "0.1.0" }
+cmx-rule-def = { path = "crates/cmx-rule-def", version = "0.1.0" }
+cmx-rule-store-pg = { path = "crates/cmx-rule-store-pg", version = "0.1.0" }
+cmx-rule-app = { path = "crates/cmx-rule-app", version = "0.1.0" }
+
+# —— 复用 cmx-container 基础设施（跨 workspace 路径；仍是 cmx-container 成员，非本库成员）——
+cmx-database-pg = { path = "../cmx-container/crates/libs/cmx-infra/cmx-database-pg", version = "0.1.12" }
+cmx-core = { path = "../cmx-container/crates/libs/cmx-core", version = "0.1.12" }
+cmx-web-chassis = { path = "../cmx-container/crates/libs/cmx-web-chassis", version = "0.1.12" }
+cmx-web-monitor = { path = "../cmx-container/crates/libs/cmx-web-monitor", version = "0.1.12" }
+cmx-service-base = { path = "../cmx-container/crates/libs/cmx-service-base", version = "0.1.12", default-features = false }
+
+# —— 外部 crate（版本照抄 cmx-container 根 [workspace.dependencies]，与 flow 对齐）——
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+toml = "0.8"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.21", features = ["v4", "serde"] }
+async-trait = "0.1"
+anyhow = "1.0"
+# 非加密内容哈希（release rev = xxhash64→16hex，字节对齐门户 cmx-jsonstore::content_rev）
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+# JWT 验签（R3 认证：验 HS256/RS256 签名，解 tenant/user/roles claim）
+jsonwebtoken = "9"
+# SSE 事件流（R4）：broadcast → axum Sse 的流适配
+tokio-stream = { version = "0.1", features = ["sync"] }
+# OpenAPI（R4 headless 契约）
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+# DMN XML 解析（R2）
+roxmltree = "0.20"
+tokio = { version = "1.41", features = ["full"] }
+axum = { version = "0.8.9", features = ["macros", "multipart"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-full", "timeout", "limit"] }
+# 自动读取 .env（与门户 / flow 一致：bin 自读 .env 无需手动 source）
+dotenvy = "0.15"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

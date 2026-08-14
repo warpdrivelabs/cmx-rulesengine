@@ -1,0 +1,20 @@
+[package]
+name = "cmx-rule-feel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# 决策层表达式引擎：R0 实现 S-FEEL **unary test** 求值子集（决策表单元格所需）——
+# 比较（> >= < <= =）、区间（[1..10] (0..100) ]1..5]）、枚举列表（"a","b" 逗号=OR）、
+# 字面量（数字/带引号字符串/true/false/null）、通配（- 或空 = 恒真）、否定（not(...)）。
+# 对标 OMG DMN S-FEEL（CL2 决策表所需）。R1 起评估复用/借鉴 dsntk-rs 长到全 FEEL(CL3)。
+#
+# 刻意封为可替换契约（ExprEngine 概念）：本 crate 是 R0 自持最小实现，保留后续切 dsntk-rs 的自由。
+
+[dependencies]
+cmx-rule-model = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

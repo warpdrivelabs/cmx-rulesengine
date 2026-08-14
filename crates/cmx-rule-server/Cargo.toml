@@ -1,0 +1,29 @@
+[package]
+name = "cmx-rule-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# cmx-rule 独立决策引擎微服务的 HTTP 服务器（一芯多壳的独立壳）。
+# 采用通用骨架 cmx-web-chassis（与 flow/report/mdm-server 同一套启动/日志/中间件/优雅关闭/banner）。
+# main 只填一个 ServiceSpec：rule 路由 + 数据源注册钩子 + 建表钩子（**无 poller**）+ rule 专属
+# banner，交 chassis::run 装配。零 cmx-api / 零平台依赖。
+
+[[bin]]
+name = "cmx-rule-server"
+path = "src/main.rs"
+
+[dependencies]
+cmx-rule-app = { workspace = true }
+cmx-web-chassis = { workspace = true }
+cmx-web-monitor = { workspace = true }
+cmx-database-pg = { workspace = true }
+cmx-service-base = { workspace = true, features = ["config-manager"] }
+
+axum = { workspace = true }
+tokio = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }

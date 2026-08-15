@@ -147,3 +147,87 @@ impl DecisionTable {
         Ok(())
     }
 }
+
+// ═══════════════════════ 决策图（JDM 式 DAG，R2）═══════════════════════
+//
+// 对标 GoRules JDM：数据从 Input 节点左→右流经各节点累积到 Output。节点类型：Input/Output/
+// DecisionTable（决策表）/Expression（FEEL 字段变换）/Decision（子决策引用，递归）。边=数据通路。
+// 用扁平结构（node_type 字符串 + 类型专属可选字段）以求 JSON 作者友好 + serde 稳健。
+
+/// 决策图。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionGraph {
+    pub nodes: Vec<GraphNode>,
+    #[serde(default)]
+    pub edges: Vec<GraphEdge>,
+}
+
+/// 图节点（扁平：type + 类型专属字段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// 节点类型："input" | "output" | "decisionTable" | "expression" | "decision"。
+    #[serde(rename = "type")]
+    pub node_type: String,
+    /// decisionTable 节点：内嵌决策表。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<DecisionTable>,
+    /// expression 节点：字段变换映射（key = FEEL 表达式）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mappings: Vec<ExprMapping>,
+    /// decision 节点：被引用的子决策 key。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_key: Option<String>,
+}
+
+/// expression 节点的一条字段映射：`key` = FEEL 表达式求值结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExprMapping {
+    pub key: String,
+    pub expression: String,
+}
+
+/// 有向边（数据通路）：source 节点输出流入 target 节点。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+impl DecisionGraph {
+    /// 结构自检：非空、id 唯一、边端点存在、决策表节点各自合法。
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.nodes.is_empty() {
+            return Err(crate::Error::Definition("决策图至少需一个节点".into()));
+        }
+        let ids: std::collections::HashSet<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
+        if ids.len() != self.nodes.len() {
+            return Err(crate::Error::Definition("决策图节点 id 重复".into()));
+        }
+        for e in &self.edges {
+            if !ids.contains(e.source.as_str()) || !ids.contains(e.target.as_str()) {
+                return Err(crate::Error::Definition(format!(
+                    "边端点不存在: {} → {}",
+                    e.source, e.target
+                )));
+            }
+        }
+        for n in &self.nodes {
+            if n.node_type == "decisionTable" {
+                match &n.table {
+                    Some(t) => t.validate()?,
+                    None => {
+                        return Err(crate::Error::Definition(format!("决策表节点 {} 缺 table", n.id)))
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}

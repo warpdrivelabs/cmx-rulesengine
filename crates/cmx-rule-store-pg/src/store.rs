@@ -11,8 +11,8 @@ use cmx_core::model::cell::DataValue;
 use cmx_core::model::data::dataset::{DataSet, Row, Schema};
 use cmx_database_pg::{execute_sql, execute_sql_with_params, query_sql_with_params, SqlParams};
 use cmx_rule_model::{
-    DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, DecisionStore, StoreError,
-    StoreResult,
+    DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, DecisionStore, ReleaseMeta, StoreError,
+    StoreResult, TestCase,
 };
 use serde_json::Value;
 
@@ -53,6 +53,183 @@ impl PgDecisionStore {
         query_sql_with_params(&self.db_id, None, sql, SqlParams::DataValues(params), ds_id)
             .await
             .map_err(|e| StoreError::Backend(format!("查询失败: {e}")))
+    }
+
+    // ─────────────────── 发布 / 版本（F1，inherent 方法，非 trait） ───────────────────
+
+    /// 发布当前草稿：写不可变 release（version+1、rev 内容哈希、active=true，旧版失活）+ 置定义已发布。
+    /// 返回新版本号。
+    pub async fn publish(&self, key: &str, published_by: Option<String>) -> StoreResult<u32> {
+        // 取当前草稿决策体。
+        let dft = self
+            .query(
+                "SELECT body FROM cmx_rule_definition WHERE key = $1",
+                vec![DataValue::String(key.to_string())],
+                "rule_def_body",
+            )
+            .await?;
+        let Some(row) = dft.iter().next() else {
+            return Err(StoreError::NotFound(format!("决策 {key} 无草稿，无法发布")));
+        };
+        let body = get_json(row, dft.schema.as_ref(), "body")?;
+        let body_str = body.to_string();
+        let rev = format!("{:016x}", xxhash_rust::xxh64::xxh64(body_str.as_bytes(), 0));
+
+        // 下一版本号 = 现有最大版本 + 1。
+        let vds = self
+            .query(
+                "SELECT COALESCE(MAX(version), 0) AS mx FROM cmx_rule_release WHERE key = $1",
+                vec![DataValue::String(key.to_string())],
+                "rule_rel_maxver",
+            )
+            .await?;
+        let cur_max = vds.iter().next().map(|r| get_i64(r, vds.schema.as_ref(), "mx")).unwrap_or(0);
+        let next = (cur_max + 1) as u32;
+        let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        // 旧版失活 → 插新 active 版 → 置定义已发布（R0 顺序执行；R3 收进事务）。
+        self.exec(
+            "UPDATE cmx_rule_release SET active = FALSE WHERE key = $1",
+            vec![DataValue::String(key.to_string())],
+        )
+        .await?;
+        self.exec(
+            "INSERT INTO cmx_rule_release (id, key, version, rev, body, active, published_by, published_at) \
+             VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7)",
+            vec![
+                DataValue::String(id),
+                DataValue::String(key.to_string()),
+                DataValue::Int(next as i64),
+                DataValue::String(rev),
+                DataValue::Json(body_str),
+                opt_str(&published_by),
+                DataValue::DateTime(now),
+            ],
+        )
+        .await?;
+        self.exec(
+            "UPDATE cmx_rule_definition SET published = TRUE, version = $2, updated_at = $3 WHERE key = $1",
+            vec![
+                DataValue::String(key.to_string()),
+                DataValue::Int(next as i64),
+                DataValue::DateTime(now),
+            ],
+        )
+        .await?;
+        Ok(next)
+    }
+
+    /// 列出某决策的全部发布版本（版本降序）。
+    pub async fn list_versions(&self, key: &str) -> StoreResult<Vec<ReleaseMeta>> {
+        let ds = self
+            .query(
+                "SELECT id, key, version, rev, active, published_by, published_at \
+                 FROM cmx_rule_release WHERE key = $1 ORDER BY version DESC",
+                vec![DataValue::String(key.to_string())],
+                "rule_versions",
+            )
+            .await?;
+        let schema = ds.schema.as_ref();
+        let mut out = Vec::new();
+        for row in ds.iter() {
+            out.push(ReleaseMeta {
+                id: get_string(row, schema, "id")?,
+                key: get_string(row, schema, "key")?,
+                version: get_i64(row, schema, "version") as u32,
+                rev: get_opt_string(row, schema, "rev").unwrap_or_default(),
+                active: get_bool(row, schema, "active"),
+                published_by: get_opt_string(row, schema, "published_by"),
+                published_at: get_opt_ts(row, schema, "published_at").unwrap_or_else(Utc::now),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 激活指定版本（其余失活）。版本不存在 → NotFound。
+    pub async fn activate_version(&self, key: &str, version: u32) -> StoreResult<()> {
+        self.exec(
+            "UPDATE cmx_rule_release SET active = FALSE WHERE key = $1",
+            vec![DataValue::String(key.to_string())],
+        )
+        .await?;
+        let n = self
+            .exec(
+                "UPDATE cmx_rule_release SET active = TRUE WHERE key = $1 AND version = $2",
+                vec![DataValue::String(key.to_string()), DataValue::Int(version as i64)],
+            )
+            .await?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!("决策 {key} 无版本 {version}")));
+        }
+        // 定义版本对齐激活版（列表/详情一致）。
+        self.exec(
+            "UPDATE cmx_rule_definition SET version = $2, updated_at = $3 WHERE key = $1",
+            vec![
+                DataValue::String(key.to_string()),
+                DataValue::Int(version as i64),
+                DataValue::DateTime(Utc::now()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    // ─────────────────── 测试用例（F1） ───────────────────
+
+    /// upsert 一条测试用例。
+    pub async fn save_test(&self, tc: &TestCase) -> StoreResult<()> {
+        self.exec(
+            "INSERT INTO cmx_rule_test_case (id, decision_key, name, input, expected, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, input = EXCLUDED.input, \
+             expected = EXCLUDED.expected",
+            vec![
+                DataValue::String(tc.id.clone()),
+                DataValue::String(tc.decision_key.clone()),
+                DataValue::String(tc.name.clone()),
+                DataValue::Json(tc.input.to_string()),
+                DataValue::Json(tc.expected.to_string()),
+                DataValue::DateTime(tc.created_at),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 列出某决策的测试用例。
+    pub async fn list_tests(&self, key: &str) -> StoreResult<Vec<TestCase>> {
+        let ds = self
+            .query(
+                "SELECT id, decision_key, name, input, expected, created_at \
+                 FROM cmx_rule_test_case WHERE decision_key = $1 ORDER BY created_at",
+                vec![DataValue::String(key.to_string())],
+                "rule_tests",
+            )
+            .await?;
+        let schema = ds.schema.as_ref();
+        let mut out = Vec::new();
+        for row in ds.iter() {
+            out.push(TestCase {
+                id: get_string(row, schema, "id")?,
+                decision_key: get_string(row, schema, "decision_key")?,
+                name: get_opt_string(row, schema, "name").unwrap_or_default(),
+                input: get_json(row, schema, "input")?,
+                expected: get_json(row, schema, "expected")?,
+                created_at: get_opt_ts(row, schema, "created_at").unwrap_or_else(Utc::now),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 删除一条测试用例。
+    pub async fn delete_test(&self, id: &str) -> StoreResult<()> {
+        self.exec(
+            "DELETE FROM cmx_rule_test_case WHERE id = $1",
+            vec![DataValue::String(id.to_string())],
+        )
+        .await?;
+        Ok(())
     }
 }
 

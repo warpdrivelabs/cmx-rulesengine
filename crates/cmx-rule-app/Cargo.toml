@@ -20,6 +20,8 @@ cmx-rule-store-pg = { workspace = true }
 cmx-database-pg = { workspace = true }
 cmx-core = { workspace = true }
 cmx-web-monitor = { workspace = true }
+# 基础服务库：多租户懒注册 pg 数据源原语（default-features=false 不拉 Redis/sqlx）
+cmx-service-base = { workspace = true, default-features = false }
 
 axum = { workspace = true }
 serde = { workspace = true }
@@ -31,3 +33,5 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 jsonwebtoken = { workspace = true }
 utoipa = { workspace = true }
+# native-pages 投递：rev = xxhash64(source)→16hex，字节对齐门户 cmx-jsonstore::content_rev
+xxhash-rust = { workspace = true }

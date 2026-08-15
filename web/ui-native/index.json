@@ -1,0 +1,40 @@
+{
+  "version": "2026.08.15",
+  "pages": [
+    {
+      "id": "portal.rules.design-workbench",
+      "name": "决策集设计工作台",
+      "details": "native_pages 四区决策集设计工作台：explorer 决策集列表、content 决策表只读预览、property 定义详情 + 发布/版本 + gap/overlap 完整性分析。数据来自 cmx-rulesengine /api/rules/v1/*。",
+      "sourceType": "js",
+      "relPath": "rule/design-workbench.js"
+    },
+    {
+      "id": "portal.rules.designer",
+      "name": "决策表设计器",
+      "details": "native_pages 多实例四区决策表设计器：explorer 输入/输出字段 + FEEL 函数目录、content 可编辑决策表网格（命中策略/动态输入输出列/规则行/单元格 FEEL 向导）、property gap/overlap 实时完整性分析。由决策集设计工作台 openWorkNode 动态开，instanceKey=key@@version。",
+      "sourceType": "js",
+      "relPath": "rule/designer.js"
+    },
+    {
+      "id": "portal.rules.sim-workbench",
+      "name": "决策应用工作台",
+      "details": "native_pages 四区决策应用/仿真工作台：explorer 决策集列表、content 输入事实 facts 试算求值 + 打开仿真台、property 输出 + 逐节点 trace 归因（含失败节点标注）。",
+      "sourceType": "js",
+      "relPath": "rule/sim-workbench.js"
+    },
+    {
+      "id": "portal.rules.simulator",
+      "name": "决策仿真台",
+      "details": "native_pages 多实例四区决策仿真台/应用器：content 输入事实 facts + 求值 + 存为用例、property 决策轨迹 trace 逐节点归因（失败节点红标）、explorer 测试用例集 + 运行套件（批跑 diff + 覆盖率）。由决策应用工作台 openWorkNode 动态开，instanceKey=key@@version。",
+      "sourceType": "js",
+      "relPath": "rule/simulator.js"
+    },
+    {
+      "id": "portal.rules.logs",
+      "name": "决策审计中心",
+      "details": "native_pages 四区决策日志/可解释性审计中心：explorer 决策集、content 决策日志列表（时刻/输出/时延/调用方/失败徽标）、property 单次决策全量 trace 归因（输入+逐节点+失败红标）。金融合规刚需：还原每笔决策为何得此结果。",
+      "sourceType": "js",
+      "relPath": "rule/logs.js"
+    }
+  ]
+}

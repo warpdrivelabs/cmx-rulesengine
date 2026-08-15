@@ -1,20 +1,22 @@
 //! 决策定义 / 元数据 / 决策日志 DTO（引擎 ↔ 存储 ↔ API 流转单元）。
 
-use crate::ir::DecisionTable;
+use crate::ir::{DecisionGraph, DecisionTable};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// 决策体：一个决策"是什么"。R0 仅单决策表；R2 加 `Graph`（JDM 式 DAG）变体。
+/// 决策体：一个决策"是什么"。R0 单决策表；R2 加 `Graph`（JDM 式 DAG）。
 ///
-/// internally tagged（`kind` 字段）——与 GoRules JDM 的节点类型标注同构，且 R2 加变体不破坏 R0 JSON。
+/// internally tagged（`kind` 字段）——与 GoRules JDM 的节点类型标注同构。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum DecisionBody {
     /// 单决策表（R0）。序列化为 `{"kind":"decisionTable", "hitPolicy":…, "inputs":…, …}`。
     #[serde(rename = "decisionTable")]
     DecisionTable(DecisionTable),
-    // R2: #[serde(rename = "graph")] Graph(crate::ir::DecisionGraph),
+    /// 决策图（R2，JDM 式 DAG）。序列化为 `{"kind":"graph", "nodes":[…], "edges":[…]}`。
+    #[serde(rename = "graph")]
+    Graph(DecisionGraph),
 }
 
 /// 决策定义（设计器产物 / 引擎输入）。
@@ -42,6 +44,7 @@ impl DecisionDef {
     pub fn validate(&self) -> crate::Result<()> {
         match &self.body {
             DecisionBody::DecisionTable(t) => t.validate(),
+            DecisionBody::Graph(g) => g.validate(),
         }
     }
 }
@@ -65,8 +68,7 @@ pub struct DecisionDefMeta {
 /// 决策日志（每次求值一条，审计 + 可解释性下钻）—— 规则引擎的"历史态"。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DecisionLog {
-    /// 日志 id。
+pub struct DecisionLog {    /// 日志 id。
     pub id: String,
     /// 决策 key + 求值时的版本。
     pub decision_key: String,
@@ -87,5 +89,35 @@ pub struct DecisionLog {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
     /// 求值时刻。
+    pub created_at: DateTime<Utc>,
+}
+
+/// 不可变发布元数据（`cmx_rule_release` 一行）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseMeta {
+    pub id: String,
+    pub key: String,
+    pub version: u32,
+    /// 发布时决策体的内容哈希（xxhash64→16hex）。
+    pub rev: String,
+    /// 是否为当前激活版本（求值装载它）。
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_by: Option<String>,
+    pub published_at: DateTime<Utc>,
+}
+
+/// 测试用例（`cmx_rule_test_case` 一行）：输入 → 期望输出，供仿真回归 + 覆盖率。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCase {
+    pub id: String,
+    pub decision_key: String,
+    #[serde(default)]
+    pub name: String,
+    pub input: Value,
+    /// 期望输出（决策的 output）。
+    pub expected: Value,
     pub created_at: DateTime<Utc>,
 }

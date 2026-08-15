@@ -118,6 +118,9 @@ async fn main() -> cmx_web_chassis::Result<()> {
     // 公开文档（免认证，挂认证之外）。
     let api_router = axum::Router::new()
         .merge(authed)
+        // 前端页只读投递（native；门户 F3 反代 portal.rules.* 取页请求到此，免认证——静态内容 +
+        // 门户反代注入服务身份）。挂认证之外、与 openapi 同层，得 /api/native-pages/*。
+        .merge(cmx_rule_app::native_pages::frontend_pages_routes::<()>())
         .route("/rules/v1/openapi.json", axum::routing::get(openapi_json));
     let app_router = axum::Router::new()
         // 根 → 决策引擎监控大盘（免认证，轮询 /api/rules/v1/stats）。

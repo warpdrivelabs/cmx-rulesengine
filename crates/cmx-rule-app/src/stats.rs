@@ -1,6 +1,5 @@
 //! 决策日志查询（可解释性下钻）+ 大盘统计聚合。
 
-use crate::engine::RULE_DB_ID;
 use crate::resp::{ApiResp, Result, RuleError};
 use axum::extract::Path;
 use axum::Json;
@@ -11,7 +10,7 @@ use serde_json::{json, Value};
 /// GET /decisions/{key}/logs —— 该决策的日志列表（最近 100 条）。
 pub async fn list_logs(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
     let ds = query_sql_with_params(
-        RULE_DB_ID,
+        &crate::tenancy::current_db_id(),
         None,
         "SELECT id, decision_key, decision_version, output, timing_us, caller, failure, created_at \
          FROM cmx_rule_decision_log WHERE decision_key = $1 ORDER BY created_at DESC LIMIT 100",
@@ -52,7 +51,7 @@ pub async fn list_logs(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> 
 /// GET /logs/{id} —— 单次决策全量 trace（可解释性）。
 pub async fn get_log(Path(id): Path<String>) -> Result<Json<ApiResp<Value>>> {
     let ds = query_sql_with_params(
-        RULE_DB_ID,
+        &crate::tenancy::current_db_id(),
         None,
         "SELECT id, decision_key, decision_version, input, output, trace, timing_us, caller, failure \
          FROM cmx_rule_decision_log WHERE id = $1",
@@ -94,7 +93,7 @@ pub async fn get_log(Path(id): Path<String>) -> Result<Json<ApiResp<Value>>> {
 /// GET /stats —— 大盘聚合（决策集数 / 日志总数 / 失败数 / 热点决策）。降级：任一子查询失败取 0。
 pub async fn stats() -> Result<Json<ApiResp<Value>>> {
     let count = |sql: &'static str| async move {
-        query_sql(RULE_DB_ID, None, sql, "rule_stat")
+        query_sql(&crate::tenancy::current_db_id(), None, sql, "rule_stat")
             .await
             .ok()
             .and_then(|ds| {

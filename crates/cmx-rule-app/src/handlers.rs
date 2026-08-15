@@ -10,7 +10,7 @@ use crate::tenant::{current_tenant, current_user};
 use axum::extract::Path;
 use axum::Json;
 use chrono::Utc;
-use cmx_rule_model::{DecisionDef, DecisionLog, DecisionStore, EvalContext};
+use cmx_rule_model::{DecisionBody, DecisionDef, DecisionLog, DecisionStore, EvalContext, TestCase};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -73,18 +73,20 @@ pub struct EvaluateReq {
     pub options: EvaluateOpts,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
+#[serde(default)]
 pub struct EvaluateOpts {
     /// 是否返回 trace（默认 true）。
-    #[serde(default = "default_true")]
     pub trace: bool,
     /// 是否落决策日志（默认 true；试算/仿真可传 false）。
-    #[serde(default = "default_true")]
     pub log: bool,
 }
 
-fn default_true() -> bool {
-    true
+// 手写 Default：options 整体缺省时 log/trace 也为 true（derive Default 会给 false，与字段语义相悖）。
+impl Default for EvaluateOpts {
+    fn default() -> Self {
+        Self { trace: true, log: true }
+    }
 }
 
 /// POST /decisions/{key}/evaluate —— 按 key 装载定义并求值。
@@ -124,7 +126,9 @@ async fn run_and_respond(
 ) -> Result<Json<ApiResp<Value>>> {
     let started = Utc::now();
     let ctx = EvalContext::new(req.input.clone());
-    let result = cmx_rule_engine::evaluate(&def, &ctx);
+    // 决策图含子决策时预加载解析器（BFS）；决策表则空解析器。
+    let resolver = build_resolver(tenant, &def).await;
+    let result = cmx_rule_engine::evaluate_with(&def, &ctx, &resolver, 0);
     let elapsed_us = (Utc::now() - started).num_microseconds().unwrap_or(0).max(0) as u64;
 
     // 失败归因（若有任一节点失败）。
@@ -170,17 +174,38 @@ async fn run_and_respond(
 
 #[derive(Deserialize)]
 pub struct FeelEvalReq {
-    /// unary test 单元格文本（如 "> 700" / "[18..65)"）。
+    /// unary test 单元格文本（如 "> 700" / "[18..65)" / "contains(?, \"vip\")"）。
     pub test: String,
     /// 被测输入值。
     pub value: Value,
+    /// 可选：输入事实上下文（供操作数/裸布尔单测引用其它变量，如 "> avgScore"）。
+    #[serde(default)]
+    pub context: Option<Value>,
 }
 
 /// POST /feel/eval —— unary test 试算。
 pub async fn feel_eval(Json(req): Json<FeelEvalReq>) -> Result<Json<ApiResp<Value>>> {
-    let r = cmx_rule_feel::eval_unary_test(&req.test, &req.value)
+    let ctx = req.context.unwrap_or_else(|| json!({}));
+    let r = cmx_rule_feel::eval_unary_test(&req.test, &req.value, &ctx)
         .map_err(|e| RuleError::business(format!("表达式错误: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "result": r }))))
+}
+
+#[derive(Deserialize)]
+pub struct FeelExprReq {
+    /// 完整 FEEL 表达式（如 "income * 5" / "if score > 700 then \"A\" else \"B\"" / "sum([1,2,3])"）。
+    pub expression: String,
+    /// 输入事实上下文（表达式里的变量）。
+    #[serde(default)]
+    pub context: Option<Value>,
+}
+
+/// POST /feel/expression —— 完整 FEEL 表达式求值（R1）。
+pub async fn feel_expression(Json(req): Json<FeelExprReq>) -> Result<Json<ApiResp<Value>>> {
+    let ctx = req.context.unwrap_or_else(|| json!({}));
+    let v = cmx_rule_feel::eval_expression(&req.expression, &ctx)
+        .map_err(|e| RuleError::business(format!("表达式错误: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "result": v }))))
 }
 
 #[derive(Deserialize)]
@@ -201,4 +226,239 @@ pub async fn feel_validate(Json(req): Json<FeelValidateReq>) -> Result<Json<ApiR
 // 生成 UUID v4（避开在 model 层引 uuid，集中在 app 层）。
 fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// 为决策图预加载子决策解析器（BFS 沿 decision 节点递归装载被引用决策；决策表返回空解析器）。
+async fn build_resolver(tenant: &str, def: &DecisionDef) -> cmx_rule_engine::MapResolver {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut map: HashMap<String, DecisionDef> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = keys_of(def).into_iter().collect();
+    let mut guard = 0usize;
+    while let Some(key) = queue.pop_front() {
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key.clone());
+        guard += 1;
+        if guard > 128 {
+            break; // 防引用炸裂
+        }
+        if let Ok(Some(sub)) = store().load_definition(tenant, &key).await {
+            for k in keys_of(&sub) {
+                if !seen.contains(&k) {
+                    queue.push_back(k);
+                }
+            }
+            map.insert(key, sub);
+        }
+    }
+    cmx_rule_engine::MapResolver(map)
+}
+
+/// 定义引用的子决策 key（仅决策图的 decision 节点）。
+fn keys_of(def: &DecisionDef) -> Vec<String> {
+    match &def.body {
+        DecisionBody::Graph(g) => cmx_rule_engine::collect_decision_keys(g),
+        DecisionBody::DecisionTable(_) => Vec::new(),
+    }
+}
+
+// ————————————————————————— 发布 / 版本（F1） —————————————————————————
+
+/// POST /definitions/{key}/publish —— 发布当前草稿 → 不可变 release + version+1。
+pub async fn publish_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let version = store()
+        .publish(&key, current_user())
+        .await
+        .map_err(|e| RuleError::business(format!("发布失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "published": true }))))
+}
+
+/// GET /definitions/{key}/versions —— 发布版本列表。
+pub async fn list_versions(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let versions = store()
+        .list_versions(&key)
+        .await
+        .map_err(|e| RuleError::internal(format!("查询版本失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!(versions))))
+}
+
+/// POST /definitions/{key}/versions/{v}/activate —— 激活某版本。
+pub async fn activate_version(
+    Path((key, version)): Path<(String, u32)>,
+) -> Result<Json<ApiResp<Value>>> {
+    store()
+        .activate_version(&key, version)
+        .await
+        .map_err(|e| RuleError::business(format!("激活失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "active": true }))))
+}
+
+// ————————————————————————— 仿真（求值不落库） —————————————————————————
+
+/// POST /decisions/{key}/simulate —— 按 key 求值但**不落审计日志**（设计期试算）。
+pub async fn simulate_by_key(
+    Path(key): Path<String>,
+    Json(mut req): Json<EvaluateReq>,
+) -> Result<Json<ApiResp<Value>>> {
+    let tenant = current_tenant();
+    let def = store()
+        .load_definition(&tenant, &key)
+        .await
+        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
+    req.options.log = false;
+    req.options.trace = true;
+    run_and_respond(&tenant, def, req).await
+}
+
+// ————————————————————————— 完整性分析（gap/overlap，超越 ZEN） —————————————————————————
+
+#[derive(Deserialize, Default)]
+pub struct AnalyzeReq {
+    /// 可选内联定义（设计器分析未保存的在编表）；缺则按 key 装载。
+    #[serde(default)]
+    pub definition: Option<DecisionDef>,
+}
+
+/// POST /decisions/{key}/analyze —— gap/overlap 完整性分析报告。
+pub async fn analyze_decision(
+    Path(key): Path<String>,
+    Json(req): Json<AnalyzeReq>,
+) -> Result<Json<ApiResp<Value>>> {
+    let def = match req.definition {
+        Some(d) => d,
+        None => {
+            let tenant = current_tenant();
+            store()
+                .load_definition(&tenant, &key)
+                .await
+                .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+                .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?
+        }
+    };
+    let report = cmx_rule_engine::analyze_def(&def);
+    Ok(Json(ApiResp::ok(json!({
+        "complete": report.is_complete(),
+        "hasOverlap": report.has_overlap(),
+        "gaps": report.gaps,
+        "overlaps": report.overlaps,
+    }))))
+}
+
+// ————————————————————————— 测试用例 —————————————————————————
+
+/// GET /decisions/{key}/tests —— 测试用例列表。
+pub async fn list_tests(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let tests = store()
+        .list_tests(&key)
+        .await
+        .map_err(|e| RuleError::internal(format!("查询测试用例失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!(tests))))
+}
+
+#[derive(Deserialize)]
+pub struct SaveTestReq {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: String,
+    pub input: Value,
+    pub expected: Value,
+}
+
+/// POST /decisions/{key}/tests —— 保存（新增/更新）测试用例。
+pub async fn save_test(
+    Path(key): Path<String>,
+    Json(req): Json<SaveTestReq>,
+) -> Result<Json<ApiResp<Value>>> {
+    let tc = TestCase {
+        id: req.id.filter(|s| !s.is_empty()).unwrap_or_else(uuid_v4),
+        decision_key: key,
+        name: req.name,
+        input: req.input,
+        expected: req.expected,
+        created_at: Utc::now(),
+    };
+    store()
+        .save_test(&tc)
+        .await
+        .map_err(|e| RuleError::internal(format!("保存测试用例失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "id": tc.id, "saved": true }))))
+}
+
+/// DELETE /decisions/{key}/tests/{id} —— 删除测试用例。
+pub async fn delete_test(Path((_key, id)): Path<(String, String)>) -> Result<Json<ApiResp<Value>>> {
+    store()
+        .delete_test(&id)
+        .await
+        .map_err(|e| RuleError::internal(format!("删除测试用例失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "id": id, "deleted": true }))))
+}
+
+/// POST /decisions/{key}/tests/run —— 跑测试套件：逐例求值 diff 期望 + 覆盖率 + 完整性。
+pub async fn run_tests(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let tenant = current_tenant();
+    let def = store()
+        .load_definition(&tenant, &key)
+        .await
+        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
+    let tests = store()
+        .list_tests(&key)
+        .await
+        .map_err(|e| RuleError::internal(format!("查询测试用例失败: {e}")))?;
+
+    let mut passed = 0usize;
+    let mut cases = Vec::new();
+    let resolver = build_resolver(&tenant, &def).await;
+    for tc in &tests {
+        let r = cmx_rule_engine::evaluate_with(
+            &def,
+            &EvalContext::new(tc.input.clone()),
+            &resolver,
+            0,
+        );
+        let pass = json_deep_eq(&r.output, &tc.expected);
+        if pass {
+            passed += 1;
+        }
+        cases.push(json!({
+            "id": tc.id, "name": tc.name, "pass": pass,
+            "actual": r.output, "expected": tc.expected,
+            "failure": r.trace.iter().find_map(|t| t.failure.clone()),
+        }));
+    }
+    let total = tests.len();
+    let cov = cmx_rule_engine::analyze_def(&def);
+    Ok(Json(ApiResp::ok(json!({
+        "total": total,
+        "passed": passed,
+        "failed": total - passed,
+        "cases": cases,
+        "coverage": { "complete": cov.is_complete(), "gaps": cov.gaps.len(), "overlaps": cov.overlaps.len() },
+    }))))
+}
+
+// ————————————————————————— FEEL 函数目录 —————————————————————————
+
+/// GET /feel/functions —— unary test 算子/形式目录（前端函数向导用）。
+pub async fn feel_functions() -> Result<Json<ApiResp<Value>>> {
+    Ok(Json(ApiResp::ok(cmx_rule_feel::function_catalog())))
+}
+
+/// JSON 深度相等：数值按 f64 比较（消除 int/float 表示差异），对象/数组递归。
+fn json_deep_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(_), Value::Number(_)) => a.as_f64() == b.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| json_deep_eq(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(k, pv)| y.get(k).is_some_and(|qv| json_deep_eq(pv, qv)))
+        }
+        _ => a == b,
+    }
 }

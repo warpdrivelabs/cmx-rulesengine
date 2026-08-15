@@ -23,3 +23,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+# release id 生成 + body 内容哈希 rev（xxhash64→16hex，字节对齐门户 content_rev）
+uuid = { workspace = true, features = ["v4"] }
+xxhash-rust = { workspace = true }

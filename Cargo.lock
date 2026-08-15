@@ -713,6 +713,7 @@ dependencies = [
  "cmx-rule-feel",
  "cmx-rule-model",
  "cmx-rule-store-pg",
+ "cmx-service-base",
  "cmx-web-monitor",
  "jsonwebtoken",
  "serde",
@@ -721,6 +722,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -784,6 +786,8 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]

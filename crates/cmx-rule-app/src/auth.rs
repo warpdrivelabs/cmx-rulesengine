@@ -52,13 +52,13 @@ struct Claims {
     extra: serde_json::Value,
 }
 
-/// 认证中间件。建租户 scope 后放行；失败返 401。
+/// 认证中间件。建租户 scope + 确保租户库就绪后放行；失败返 401。
 pub async fn auth(req: Request, next: Next) -> Response {
     let cfg = AuthConfig::from_env();
 
     // off：默认租户放行（单租户零回归）。
     if cfg.mode == "off" {
-        return scope(TenantCtx::new(crate::tenant::DEFAULT_TENANT), next.run(req)).await;
+        return scoped_run(TenantCtx::new(crate::tenant::DEFAULT_TENANT), req, next).await;
     }
 
     // API Key 优先（服务身份）。
@@ -69,7 +69,7 @@ pub async fn auth(req: Request, next: Next) -> Response {
     {
         if let Some((_, tenant)) = cfg.api_keys.iter().find(|(k, _)| k == key) {
             let ctx = TenantCtx::new(tenant.clone()).with_roles(vec!["service".into()]);
-            return scope(ctx, next.run(req)).await;
+            return scoped_run(ctx, req, next).await;
         }
         return unauthorized("无效 API Key");
     }
@@ -85,12 +85,21 @@ pub async fn auth(req: Request, next: Next) -> Response {
             return unauthorized("缺少 Bearer 令牌");
         };
         match decode_claims(token, &cfg) {
-            Ok(ctx) => scope(ctx, next.run(req)).await,
+            Ok(ctx) => scoped_run(ctx, req, next).await,
             Err(msg) => unauthorized(&msg),
         }
     } else {
         unauthorized("未知认证模式")
     }
+}
+
+/// 建立租户 scope，在其内确保租户库就绪（multi 模式懒备库）后放行 handler。
+async fn scoped_run(ctx: TenantCtx, req: Request, next: Next) -> Response {
+    scope(ctx, async move {
+        crate::tenancy::ensure_current_ready().await;
+        next.run(req).await
+    })
+    .await
 }
 
 /// 验签解 claim → TenantCtx。

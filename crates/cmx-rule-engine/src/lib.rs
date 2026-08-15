@@ -7,13 +7,28 @@
 //! 规则、哪个输入列、什么错"，而非静默吞掉或只抛顶层错。
 
 use cmx_rule_model::{
-    DecisionBody, DecisionDef, DecisionRule, DecisionTable, EvalContext, EvalResult, HitPolicy,
-    TraceNode,
+    CoverageReport, DecisionBody, DecisionDef, DecisionRule, DecisionTable, EvalContext, EvalResult,
+    HitPolicy, TraceNode,
 };
 use serde_json::{json, Value};
 
-/// 求值一个决策定义（R0 仅决策表）。返回输出 + trace。**不落库**（存储由 app 层做）。
+pub mod analyze;
+pub mod graph;
+pub use analyze::analyze_table;
+pub use graph::{collect_decision_keys, evaluate_graph, DecisionResolver, MapResolver, NoResolver};
+
+/// 求值一个决策定义（决策表或决策图）。图含子决策时用 [`evaluate_with`] 传入解析器。
 pub fn evaluate(def: &DecisionDef, ctx: &EvalContext) -> EvalResult {
+    evaluate_with(def, ctx, &graph::NoResolver, 0)
+}
+
+/// 求值决策定义，可注入子决策解析器 + 递归深度（决策图的 decision 节点用）。
+pub fn evaluate_with(
+    def: &DecisionDef,
+    ctx: &EvalContext,
+    resolver: &dyn DecisionResolver,
+    depth: usize,
+) -> EvalResult {
     match &def.body {
         DecisionBody::DecisionTable(table) => {
             let node = evaluate_table(table, ctx, "decisionTable");
@@ -22,6 +37,33 @@ pub fn evaluate(def: &DecisionDef, ctx: &EvalContext) -> EvalResult {
                 output,
                 trace: vec![node],
             }
+        }
+        DecisionBody::Graph(g) => graph::evaluate_graph(g, ctx, resolver, depth),
+    }
+}
+
+/// 决策定义的完整性分析（决策表直接分析；决策图聚合各决策表节点，node id 前缀区分）。
+pub fn analyze_def(def: &DecisionDef) -> CoverageReport {
+    match &def.body {
+        DecisionBody::DecisionTable(t) => analyze::analyze_table(t),
+        DecisionBody::Graph(g) => {
+            let mut report = CoverageReport::default();
+            for node in &g.nodes {
+                if node.node_type == "decisionTable"
+                    && let Some(t) = &node.table
+                {
+                    let r = analyze::analyze_table(t);
+                    for mut gp in r.gaps {
+                        gp.description = format!("[{}] {}", node.id, gp.description);
+                        report.gaps.push(gp);
+                    }
+                    for mut ov in r.overlaps {
+                        ov.description = format!("[{}] {}", node.id, ov.description);
+                        report.overlaps.push(ov);
+                    }
+                }
+            }
+            report
         }
     }
 }
@@ -54,7 +96,7 @@ pub fn evaluate_table(table: &DecisionTable, ctx: &EvalContext, node_id: &str) -
     }
 
     // 按命中策略汇总输出。
-    match summarize(table, &matched) {
+    match summarize(table, &matched, ctx) {
         Ok(output) => TraceNode {
             node_id: node_id.to_string(),
             node_kind: "decisionTable".to_string(),
@@ -77,7 +119,8 @@ fn row_matches(
     for (ci, input) in table.inputs.iter().enumerate() {
         let cell = &rule.input_entries[ci];
         let value = ctx.get_path(&input.expression);
-        let ok = cmx_rule_feel::eval_unary_test(cell, &value)
+        // 操作数/裸布尔单测可引用其它输入变量（`> avgScore` / `contains(?, "vip")`），故传 ctx.input。
+        let ok = cmx_rule_feel::eval_unary_test(cell, &value, &ctx.input)
             .map_err(|e| format!("输入列 {:?} 单测 {:?} —— {e}", input.expression, cell))?;
         if !ok {
             return Ok(false);
@@ -86,12 +129,20 @@ fn row_matches(
     Ok(true)
 }
 
-/// 求值一条命中规则行的输出对象（各输出列字面量）。
-fn row_output(table: &DecisionTable, rule: &DecisionRule) -> Result<Value, String> {
+/// 是否有任一规则行命中给定输入（gap 分析用；求值出错按未命中）。
+pub fn any_rule_matches(table: &DecisionTable, ctx: &EvalContext) -> bool {
+    table
+        .rules
+        .iter()
+        .any(|r| row_matches(table, r, ctx).unwrap_or(false))
+}
+
+/// 求值一条命中规则行的输出对象（各输出列为完整 FEEL 表达式，可引用输入事实）。
+fn row_output(table: &DecisionTable, rule: &DecisionRule, ctx: &EvalContext) -> Result<Value, String> {
     let mut obj = serde_json::Map::new();
     for (ci, out) in table.outputs.iter().enumerate() {
         let expr = &rule.output_entries[ci];
-        let v = cmx_rule_feel::eval_output_literal(expr)
+        let v = cmx_rule_feel::eval_output(expr, &ctx.input)
             .map_err(|e| format!("输出列 {:?} 表达式 {:?} —— {e}", out.name, expr))?;
         obj.insert(out.name.clone(), v);
     }
@@ -99,7 +150,7 @@ fn row_output(table: &DecisionTable, rule: &DecisionRule) -> Result<Value, Strin
 }
 
 /// 按命中策略把命中行汇总成最终输出。
-fn summarize(table: &DecisionTable, matched: &[usize]) -> Result<Value, String> {
+fn summarize(table: &DecisionTable, matched: &[usize], ctx: &EvalContext) -> Result<Value, String> {
     let hp = table.hit_policy;
 
     // 无命中：单命中/聚合 → null；多命中 → 空列表；C# → 0。
@@ -113,7 +164,7 @@ fn summarize(table: &DecisionTable, matched: &[usize]) -> Result<Value, String> 
     }
 
     let outputs: Result<Vec<Value>, String> =
-        matched.iter().map(|&ri| row_output(table, &table.rules[ri])).collect();
+        matched.iter().map(|&ri| row_output(table, &table.rules[ri], ctx)).collect();
     let outputs = outputs?;
 
     match hp {

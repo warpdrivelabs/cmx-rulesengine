@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>cmx-rulesengine · 可嵌 Web Component 演示</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, "PingFang SC", sans-serif; background: #f4f6f9; color: #32363a; }
+    header { padding: 16px 24px; background: linear-gradient(135deg, #00e6aa, #3a8cff); color: #04121a; }
+    header h1 { margin: 0; font-size: 18px; }
+    header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+    .controls { padding: 12px 24px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: #fff; border-bottom: 1px solid #e5e5e5; }
+    .controls input, .controls select { border: 1px solid #c9ced4; border-radius: 6px; padding: 6px 9px; font-size: 13px; }
+    .tabs { display: flex; gap: 6px; padding: 12px 24px 0; }
+    .tabs button { border: 1px solid #d0d6de; background: #fff; border-radius: 8px 8px 0 0; padding: 7px 16px; font-size: 13px; cursor: pointer; }
+    .tabs button.active { background: #0a6ed1; color: #fff; border-color: #0a6ed1; }
+    .stage { margin: 0 24px 24px; background: #fff; border: 1px solid #e5e5e5; border-radius: 0 10px 10px 10px; min-height: 520px; }
+    rule-designer, rule-simulator, rule-logs { display: block; height: 620px; --rule-line: #e2e6ec; }
+    code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>cmx-rulesengine · 可嵌 Web Component</h1>
+    <p>一芯多壳的「壳②」：<code>&lt;rule-designer&gt;</code> / <code>&lt;rule-simulator&gt;</code> / <code>&lt;rule-logs&gt;</code> —— 框架无关，配 api-base + token 即用</p>
+  </header>
+  <div class="controls">
+    <label>api-base <input id="apiBase" value="http://127.0.0.1:8094" size="30"></label>
+    <label>decision-key <input id="key" value="demo_credit" size="16"></label>
+    <label>token <input id="token" placeholder="（off 模式可空）" size="20"></label>
+    <button id="apply">应用</button>
+  </div>
+  <div class="tabs">
+    <button data-tab="designer" class="active">决策表设计器</button>
+    <button data-tab="simulator">决策仿真台</button>
+    <button data-tab="logs">决策审计中心</button>
+  </div>
+  <div class="stage" id="stage"></div>
+
+  <script type="module" src="../index.js"></script>
+  <script type="module">
+    const stage = document.getElementById('stage');
+    const state = { tab: 'designer' };
+    function render() {
+      const apiBase = document.getElementById('apiBase').value;
+      const key = document.getElementById('key').value;
+      const token = document.getElementById('token').value;
+      const attrs = `api-base="${apiBase}" token="${token}" decision-key="${key}"`;
+      const tag = state.tab === 'designer' ? 'rule-designer' : state.tab === 'simulator' ? 'rule-simulator' : 'rule-logs';
+      stage.innerHTML = `<${tag} ${attrs}></${tag}>`;
+    }
+    document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active'); state.tab = b.dataset.tab; render();
+    }));
+    document.getElementById('apply').addEventListener('click', render);
+    render();
+  </script>
+</body>
+</html>

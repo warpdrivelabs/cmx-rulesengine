@@ -468,6 +468,8 @@ fn eval_bin(op: BinOp, l: &Ast, r: &Ast, scope: &Scope) -> Result<Value> {
     let b = eval(r, scope)?;
     match op {
         BinOp::Add => match (&a, &b) {
+            // 与 null 拼接/相加 → null（DMN 语义：null 传播，不产生字面量 "null"）。BUG-002 修复。
+            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
             (Value::String(x), _) => Ok(Value::String(format!("{x}{}", to_str(&b)))),
             (_, Value::String(y)) => Ok(Value::String(format!("{}{y}", to_str(&a)))),
             _ => num2(&a, &b, |x, y| x + y),
@@ -531,7 +533,22 @@ fn num2(a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> Result<Value> {
     match (a.as_f64(), b.as_f64()) { (Some(x), Some(y)) => Ok(json!(f(x, y))), _ => Ok(Value::Null) }
 }
 fn to_str(v: &Value) -> String {
-    match v { Value::String(s) => s.clone(), Value::Null => "null".into(), other => other.to_string() }
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => "null".into(),
+        // 整数值不带 `.0` 尾巴（DMN 语义：string(42) → "42" 非 "42.0"）。BUG-001 修复。
+        Value::Number(n) => n.as_f64().map(feel_num_str).unwrap_or_else(|| n.to_string()),
+        other => other.to_string(),
+    }
+}
+
+/// 数值 → 字符串：整数值（在 2^53 安全整数域内且无小数部分）渲染为无 `.0`，其余按 f64 默认。
+fn feel_num_str(x: f64) -> String {
+    if x.is_finite() && x.fract() == 0.0 && x.abs() < 9_007_199_254_740_992.0 {
+        format!("{}", x as i64)
+    } else {
+        x.to_string()
+    }
 }
 
 // ═══════════════════════════ 内置函数库 ═══════════════════════════

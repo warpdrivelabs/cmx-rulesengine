@@ -231,6 +231,18 @@ impl PgDecisionStore {
         .await?;
         Ok(())
     }
+
+    /// 彻底删除一个决策集：连带清理其定义 / 发布版本 / 决策日志 / 测试用例四表。
+    /// 无外键（对齐 flow 硬约束），故逐表 DELETE；返回删除的定义行数（0 = 键不存在）。
+    pub async fn delete_definition(&self, key: &str) -> StoreResult<u64> {
+        let k = || DataValue::String(key.to_string());
+        // 先清子表（日志/用例/发布），最后删定义主行——顺序无外键约束仅为语义清晰。
+        self.exec("DELETE FROM cmx_rule_decision_log WHERE decision_key = $1", vec![k()]).await?;
+        self.exec("DELETE FROM cmx_rule_test_case WHERE decision_key = $1", vec![k()]).await?;
+        self.exec("DELETE FROM cmx_rule_release WHERE key = $1", vec![k()]).await?;
+        let n = self.exec("DELETE FROM cmx_rule_definition WHERE key = $1", vec![k()]).await?;
+        Ok(n)
+    }
 }
 
 #[async_trait]

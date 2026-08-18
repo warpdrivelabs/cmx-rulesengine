@@ -16,6 +16,20 @@
       "relPath": "rule/designer.js"
     },
     {
+      "id": "portal.rules.graph-component",
+      "name": "决策图组件",
+      "details": "@cmx/decision-graph 构建产物（vendor）。自注册 <cmx-decision-graph> 自定义元素：SVG 决策图画布 + 自动分层布局 + 拖拽节点 + 拉线连边。决策图设计器/预览经 fetch 本条目源码 → blob import 一次性注册后使用。源自独立 TS 组件包 cmx-decision-graph/，改源须重跑 build.sh + sync-component.sh。",
+      "sourceType": "js",
+      "relPath": "vendor/cmx-decision-graph.js"
+    },
+    {
+      "id": "portal.rules.graph-designer",
+      "name": "决策图设计器",
+      "details": "native_pages 多实例四区决策图（JDM DAG）可视化设计器：explorer 节点列表/调色板/子决策参考、content 手搓 SVG 有向图画布（自动分层布局、增删节点、连线成图、防环）、property 选中节点编辑器（决策表内嵌网格/表达式映射/子决策引用）+ 图级 gap/overlap 完整性分析 + 保存/发布。由决策集设计工作台按 kind=graph openWorkNode 动态开，instanceKey=key@@version。",
+      "sourceType": "js",
+      "relPath": "rule/graph-designer.js"
+    },
+    {
       "id": "portal.rules.sim-workbench",
       "name": "决策应用工作台",
       "details": "native_pages 四区决策应用/仿真工作台：explorer 决策集列表、content 输入事实 facts 试算求值 + 打开仿真台、property 输出 + 逐节点 trace 归因（含失败节点标注）。",

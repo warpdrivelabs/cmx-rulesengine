@@ -670,6 +670,30 @@ mod tests {
     }
 
     #[test]
+    fn string_of_integer_has_no_dot_zero() {
+        // BUG-001：string(整数) 不应带 .0（DMN 语义）。
+        assert_eq!(ev("string(42)", json!({})), json!("42"));
+        assert_eq!(ev("string(100)", json!({})), json!("100"));
+        assert_eq!(ev("string(0)", json!({})), json!("0"));
+        assert_eq!(ev("string(-7)", json!({})), json!("-7"));
+        // 真正的小数保留小数。
+        assert_eq!(ev("string(3.14)", json!({})), json!("3.14"));
+        // 拼接整数也无 .0。
+        assert_eq!(ev("\"no-\" + 42", json!({})), json!("no-42"));
+        assert_eq!(ev("\"amt-\" + income", json!({ "income": 5000 })), json!("amt-5000"));
+    }
+
+    #[test]
+    fn concat_with_null_propagates_null() {
+        // BUG-002：与 null 拼接 → null（不产生字面量 "null"）。
+        assert_eq!(ev("\"x-\" + missing", json!({})), json!(null));
+        assert_eq!(ev("missing + \"-y\"", json!({})), json!(null));
+        // 算术与 null → null（原有语义保持）。
+        assert_eq!(ev("missing + 5", json!({})), json!(null));
+        assert_eq!(ev("undefined_var * 2", json!({})), json!(null));
+    }
+
+    #[test]
     fn expr_lists_in_and_quantifiers() {
         assert_eq!(ev("sum([1, 2, 3, 4])", json!({})), json!(10.0));
         assert_eq!(ev("count([10, 20, 30])", json!({})), json!(3));

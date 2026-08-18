@@ -275,6 +275,18 @@ pub async fn publish_definition(Path(key): Path<String>) -> Result<Json<ApiResp<
     Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "published": true }))))
 }
 
+/// DELETE /definitions/{key} —— 彻底删除决策集（连带清理发布/日志/用例四表）。
+pub async fn delete_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let deleted = store()
+        .delete_definition(&key)
+        .await
+        .map_err(|e| RuleError::internal(format!("删除失败: {e}")))?;
+    if deleted == 0 {
+        return Err(RuleError::not_found(format!("决策 {key} 不存在")));
+    }
+    Ok(Json(ApiResp::ok(json!({ "key": key, "deleted": true }))))
+}
+
 /// GET /definitions/{key}/versions —— 发布版本列表。
 pub async fn list_versions(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
     let versions = store()
@@ -283,7 +295,6 @@ pub async fn list_versions(Path(key): Path<String>) -> Result<Json<ApiResp<Value
         .map_err(|e| RuleError::internal(format!("查询版本失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(versions))))
 }
-
 /// POST /definitions/{key}/versions/{v}/activate —— 激活某版本。
 pub async fn activate_version(
     Path((key, version)): Path<(String, u32)>,

@@ -53,7 +53,10 @@ where
         .route("/definitions", get(handlers::list_definitions))
         .route("/definitions/draft", post(handlers::save_draft))
         .route("/definitions/validate", post(handlers::validate_definition))
-        .route("/definitions/{key}", get(handlers::get_definition))
+        .route(
+            "/definitions/{key}",
+            get(handlers::get_definition).delete(handlers::delete_definition),
+        )
         // —— 发布 / 版本（F1）——
         .route("/definitions/{key}/publish", post(handlers::publish_definition))
         .route("/definitions/{key}/versions", get(handlers::list_versions))

@@ -43,15 +43,76 @@ function typedInput(facts) {
   return input;
 }
 
+// FEEL 保留字/内置函数名（不作为事实变量提取）。
+const FEEL_RESERVED = new Set([
+  'if', 'then', 'else', 'and', 'or', 'not', 'true', 'false', 'null', 'for', 'in', 'return',
+  'some', 'every', 'satisfies', 'item',
+  'floor', 'ceiling', 'ceil', 'round', 'abs', 'modulo', 'sqrt', 'min', 'max', 'sum', 'mean', 'avg',
+  'upper', 'upperCase', 'lower', 'lowerCase', 'substring', 'contains', 'startsWith', 'startswith',
+  'endsWith', 'endswith', 'concatenate', 'concat', 'string', 'number', 'trim', 'count', 'length',
+  'len', 'sort', 'append', 'coalesce',
+]);
+
+// 从 FEEL 表达式提取顶层变量名（取标识符根，去保留字/函数调用名/字符串字面量内文本）。
+function extractVars(expr, out) {
+  if (!expr || typeof expr !== 'string') return;
+  // 先剔除字符串字面量（"..." / '...'），避免把引号内文本误当变量。
+  const stripped = expr.replace(/"(?:[^"\\]|\\.)*"/g, ' ').replace(/'(?:[^'\\]|\\.)*'/g, ' ');
+  const re = /[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*/g;
+  let m;
+  while ((m = re.exec(stripped))) {
+    // 函数调用名（后跟左括号）跳过。
+    if (stripped[re.lastIndex] === '(') continue;
+    const root = m[0].split('.')[0];
+    if (FEEL_RESERVED.has(root)) continue;
+    out.add(root);
+  }
+}
+
+// 收集一个决策所有可作为「输入事实」的变量：输入列表达式 ∪ 输出/单元格/图节点表达式引用的自由变量。
+// 修复 BUG-003：输出格如 income*5 引用的 income 不是输入列，原表单遗漏，用户无法录入。
+function collectFactVars(d) {
+  if (!d) return [];
+  const vars = [];        // 有序：输入列在前
+  const seen = new Set();
+  const add = (name, label) => { if (name && !seen.has(name)) { seen.add(name); vars.push({ name, label: label || name }); } };
+  // 1) 决策表输入列（保留 label）。
+  (d.inputs || []).forEach(c => { const k = c.expression; if (k) add(k, c.label); extraFromExpr(c.expression); });
+  // 2) 决策表规则行单元格 + 输出格表达式。
+  (d.rules || []).forEach(r => {
+    (r.inputEntries || []).forEach(extraFromExpr);
+    (r.outputEntries || []).forEach(extraFromExpr);
+  });
+  // 3) 决策图节点：内联表、expression 映射、edge 无表达式。
+  (d.nodes || []).forEach(n => {
+    if (n.table) collectFactVars(n.table).forEach(v => add(v.name, v.label));
+    (n.mappings || []).forEach(mp => extraFromExpr(mp.expression));
+  });
+  function extraFromExpr(expr) {
+    const s = new Set();
+    extractVars(expr, s);
+    s.forEach(v => add(v));
+  }
+  return vars;
+}
+
 async function loadAll(st) {
   try { st.def = await apiJson('/api/rules/v1/definitions/' + encodeURIComponent(st.props.key)); } catch { st.def = null; }
   try { st.tests = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(st.props.key) + '/tests') || []; } catch { st.tests = []; }
   st.loaded = true;
 }
+// 组装最终 input：表单 facts（智能转型）叠加「高级 JSON」（若填了且合法，覆盖同名字段）。
+function buildInput(st) {
+  const base = typedInput(st.facts);
+  const raw = (st.factsRaw || '').trim();
+  if (!raw) return base;
+  try { const j = JSON.parse(raw); if (j && typeof j === 'object') return { ...base, ...j }; } catch { /* 非法 JSON 忽略，仅用表单 */ }
+  return base;
+}
 async function evaluate(st) {
   try {
     st.result = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(st.props.key) + '/simulate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: typedInput(st.facts), options: { trace: true } }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: buildInput(st), options: { trace: true } }),
     });
   } catch (e) { st.result = { error: e.message }; }
   refresh(st, 'content'); refresh(st, 'property');
@@ -62,7 +123,7 @@ async function saveAsTest(st) {
   if (name == null) return;
   try {
     await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(st.props.key) + '/tests', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, input: typedInput(st.facts), expected: st.result.output }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, input: buildInput(st), expected: st.result.output }),
     });
     st.tests = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(st.props.key) + '/tests') || [];
     flash('已存为用例'); refresh(st, 'explorer');
@@ -104,11 +165,12 @@ function viewHtml(st, view) {
 function contentHtml(st) {
   const d = st.def;
   if (!d) return `<div class="rs"><div class="ph">决策不存在</div></div>`;
-  const inputs = d.inputs || [];
-  const fields = inputs.map(c => {
-    const key = c.expression;
-    return `<label class="rs-field"><span>${esc(c.label || key)} <code>${esc(key)}</code></span>
-      <input class="rs-in" data-fact="${esc(key)}" value="${esc(st.facts[key] ?? '')}" placeholder="输入 ${esc(key)}"/></label>`;
+  const factVars = collectFactVars(d);
+  const inputKeys = new Set((d.inputs || []).map(c => c.expression));
+  const fields = factVars.map(v => {
+    const badge = inputKeys.has(v.name) ? '' : ' <em class="rs-derived" title="输出/条件表达式引用的变量">派生</em>';
+    return `<label class="rs-field"><span>${esc(v.label)} <code>${esc(v.name)}</code>${badge}</span>
+      <input class="rs-in" data-fact="${esc(v.name)}" value="${esc(st.facts[v.name] ?? '')}" placeholder="输入 ${esc(v.name)}"/></label>`;
   }).join('');
   const r = st.result; let out = '';
   if (r && r.error) out = `<div class="rs-out err"><div class="rs-outhd">✕ 求值失败</div><div class="rs-fail">${esc(r.error)}</div></div>`;
@@ -121,7 +183,10 @@ function contentHtml(st) {
   }
   return `<div class="rs">
     <div class="rs-hd">${esc(d.name || d.key)} · 输入事实</div>
-    <div class="rs-form">${fields || '<div class="ph">该决策无输入列</div>'}</div>
+    <div class="rs-form">${fields || '<div class="ph">该决策无可录入变量</div>'}</div>
+    <details class="rs-rawwrap"><summary>高级：直接编辑 JSON facts</summary>
+      <textarea class="rs-raw" data-fact-raw placeholder='{"score":800,"income":10000}'>${esc(st.factsRaw ?? '')}</textarea>
+      <div class="rs-rawhint">填了此处则以此为准（覆盖上方表单），便于补录任意字段</div></details>
     <div class="rs-actions"><button class="rs-btn primary" data-act="eval">求值</button>
       <button class="rs-btn" data-act="save-test" ${r && !r.error ? '' : 'disabled'}>存为用例</button></div>
     ${out}</div>`;
@@ -172,7 +237,12 @@ function propertyHtml(st) {
 }
 
 function bind(root, st, view) {
-  root.addEventListener('input', (ev) => { const f = ev.target.closest('[data-fact]'); if (f) st.facts[f.getAttribute('data-fact')] = f.value; });
+  if (root.__rulesSimBound) return; // 委托监听只绑一次；refresh 仅重置 innerHTML 不动 root，重复绑会叠加→事件风暴
+  root.__rulesSimBound = true;
+  root.addEventListener('input', (ev) => {
+    const f = ev.target.closest('[data-fact]'); if (f) { st.facts[f.getAttribute('data-fact')] = f.value; return; }
+    if (ev.target.matches('[data-fact-raw]')) st.factsRaw = ev.target.value; // 高级 JSON facts
+  });
   root.addEventListener('click', (ev) => {
     const tc = ev.target.closest('.rs-tc')?.getAttribute('data-tc');
     const act = ev.target.closest('[data-act]')?.getAttribute('data-act');
@@ -194,42 +264,72 @@ function esc(s) { return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;
 
 function css() {
   return `
-  .rs{font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:var(--sapTextColor,#32363a);height:100%;box-sizing:border-box;padding:8px 10px;overflow:auto}
-  .ph{color:#8b97b3;padding:16px 10px;text-align:center}
-  .rs-hd{font-weight:600;font-size:12px;color:var(--sapContent_LabelColor,#6a6d70);margin:10px 0 6px;display:flex;align-items:center;gap:8px}
-  .rs-sub{font-weight:400;color:#8b97b3;font-size:11px}
-  .rs-form{display:flex;flex-direction:column;gap:8px}
-  .rs-field{display:flex;flex-direction:column;gap:3px}.rs-field span{font-size:11px;color:#8b97b3}.rs-field code{color:#8b97b3;font-size:10px}
-  .rs-in{border:1px solid var(--sapField_BorderColor,#c9ced4);border-radius:6px;padding:6px 9px;font-size:13px;background:var(--sapField_Background,#fff);color:inherit}
-  .rs-in:focus{outline:none;border-color:#0a6ed1}
-  .rs-btn{border:1px solid #0a6ed1;background:#fff;color:#0a6ed1;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer}
-  .rs-btn.primary{background:#0a6ed1;color:#fff}.rs-btn.primary:hover{background:#085caf}.rs-btn.xs{padding:2px 8px;font-size:11px}
-  .rs-btn:disabled{opacity:.45;cursor:default}
+  .rs{
+    /* ── 设计令牌：锚定 UI5 --sap*（随门户主题 light/dark 翻转，穿透 shadow DOM）；独立 :8094 走 hex 兜底。 ── */
+    --dg-fg:var(--sapTextColor,#1c2530);--dg-muted:var(--sapContent_LabelColor,#5a6b7b);--dg-faint:var(--sapContent_LabelColor,#8b97b3);
+    --dg-bg:var(--sapGroup_ContentBackground,#fff);
+    --dg-surface:color-mix(in srgb,var(--sapList_Background,#fff) 88%,var(--sapHighlightColor,#0a6ed1) 3%);
+    --dg-hover:var(--sapList_Hover_Background,#eef3fb);
+    --dg-sel:color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 14%,transparent);
+    --dg-border:color-mix(in srgb,var(--sapField_BorderColor,#c9ced4) 60%,transparent);
+    --dg-border-strong:color-mix(in srgb,var(--sapField_BorderColor,#c9ced4) 90%,transparent);
+    --dg-accent:var(--sapHighlightColor,#0a6ed1);--dg-accent2:color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 55%,#00d0c0);
+    --dg-accent-soft:color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 12%,transparent);
+    --dg-accent-line:color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 40%,transparent);
+    --dg-glow:0 0 0 1px color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 22%,transparent),0 6px 18px -8px color-mix(in srgb,var(--sapHighlightColor,#0a6ed1) 45%,transparent);
+    --dg-ok:var(--sapPositiveColor,#178a5a);--dg-warn:var(--sapCriticalColor,#c26a00);--dg-danger:var(--sapNegativeColor,#d1394a);
+    --dg-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color-scheme:light dark;
+    font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:var(--dg-fg);height:100%;box-sizing:border-box;padding:10px 11px;overflow:auto}
+  .ph{color:var(--dg-faint);padding:22px 10px;text-align:center;font-size:12px}
+  .rs-hd{font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--dg-muted);margin:12px 0 7px;display:flex;align-items:center;gap:8px}
+  .rs-hd::before{content:"";width:3px;height:12px;border-radius:2px;background:linear-gradient(var(--dg-accent),var(--dg-accent2));box-shadow:0 0 8px var(--dg-accent-line);flex:0 0 auto}
+  .rs-hd:first-child{margin-top:2px}
+  .rs-sub{font-weight:500;color:var(--dg-faint);font-size:10px;letter-spacing:0;text-transform:none;padding:1px 6px;border-radius:10px;background:var(--dg-accent-soft)}
+  .rs-form{display:flex;flex-direction:column;gap:9px}
+  .rs-field{display:flex;flex-direction:column;gap:4px}.rs-field span{font-size:11px;color:var(--dg-muted)}.rs-field code{color:var(--dg-faint);font-size:10px;font-family:var(--dg-mono)}
+  .rs-in{border:1px solid var(--dg-border-strong);border-radius:8px;padding:7px 10px;font-size:13px;background:var(--sapField_Background,#fff);color:inherit;transition:border-color .14s,box-shadow .14s}
+  .rs-in:focus{outline:none;border-color:var(--dg-accent);box-shadow:0 0 0 3px var(--dg-accent-soft)}
+  .rs-derived{font-style:normal;font-size:9px;color:var(--dg-warn);background:color-mix(in srgb,var(--dg-warn) 14%,transparent);border:1px solid color-mix(in srgb,var(--dg-warn) 28%,transparent);border-radius:6px;padding:0 5px;margin-left:5px;font-weight:600}
+  .rs-rawwrap{margin:8px 0 2px;font-size:12px}
+  .rs-rawwrap summary{cursor:pointer;color:var(--dg-faint);font-size:11px;user-select:none}.rs-rawwrap summary:hover{color:var(--dg-accent)}
+  .rs-raw{width:100%;box-sizing:border-box;min-height:56px;margin-top:6px;border:1px solid var(--dg-border-strong);border-radius:8px;padding:7px 10px;font:12px/1.5 var(--dg-mono);background:var(--sapField_Background,#fff);color:inherit;resize:vertical}
+  .rs-raw:focus{outline:none;border-color:var(--dg-accent);box-shadow:0 0 0 3px var(--dg-accent-soft)}
+  .rs-rawhint{font-size:10px;color:var(--dg-faint);margin-top:3px}
+  .rs-btn{border:1px solid var(--dg-border-strong);background:var(--dg-surface);color:var(--dg-accent);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:border-color .14s,box-shadow .14s}
+  .rs-btn:hover{border-color:var(--dg-accent);box-shadow:var(--dg-glow)}
+  .rs-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color:#fff;border-color:transparent}
+  .rs-btn.primary:hover{filter:brightness(1.06)}.rs-btn.xs{padding:3px 9px;font-size:11px}
+  .rs-btn:disabled{opacity:.4;cursor:default;box-shadow:none}
   .rs-actions{margin-top:12px;display:flex;gap:8px}
-  .rs-out{margin-top:14px;border-radius:8px;padding:10px 12px}
-  .rs-out.ok{background:rgba(46,125,91,.08);border:1px solid rgba(46,125,91,.25)}
-  .rs-out.err{background:rgba(217,83,79,.08);border:1px solid rgba(217,83,79,.3)}
-  .rs-outhd{font-weight:600;font-size:12px;margin-bottom:6px}
-  .rs-json{margin:0;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;color:inherit}.rs-json.sm{font-size:11px;color:#6a6d70;margin-top:4px}
-  .rs-fail{color:#c0392b;font-size:11px;margin-top:6px}
-  .rs-kv{display:flex;gap:8px;padding:3px 0}.rs-kv span{color:#8b97b3;width:60px}
+  .rs-out{margin-top:14px;border-radius:11px;padding:11px 13px;position:relative;overflow:hidden}
+  .rs-out::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+  .rs-out.ok{background:linear-gradient(135deg,color-mix(in srgb,var(--dg-ok) 10%,transparent),transparent 68%),var(--dg-surface);border:1px solid color-mix(in srgb,var(--dg-ok) 30%,transparent)}
+  .rs-out.ok::before{background:var(--dg-ok);box-shadow:0 0 10px var(--dg-ok)}
+  .rs-out.err{background:linear-gradient(135deg,color-mix(in srgb,var(--dg-danger) 10%,transparent),transparent 68%),var(--dg-surface);border:1px solid color-mix(in srgb,var(--dg-danger) 30%,transparent)}
+  .rs-out.err::before{background:var(--dg-danger);box-shadow:0 0 10px var(--dg-danger)}
+  .rs-outhd{font-weight:600;font-size:12px;margin-bottom:6px;font-variant-numeric:tabular-nums}
+  .rs-json{margin:0;font:12px/1.5 var(--dg-mono);white-space:pre-wrap;color:inherit}.rs-json.sm{font-size:11px;color:var(--dg-muted);margin-top:4px}
+  .rs-fail{color:var(--dg-danger);font-size:11px;margin-top:6px}
+  .rs-kv{display:flex;gap:8px;padding:4px 0;align-items:baseline}.rs-kv span{color:var(--dg-faint);width:60px;font-size:11px;flex:0 0 auto}
   .rs-tcs{list-style:none;margin:0;padding:0}
-  .rs-tc{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;cursor:pointer}
-  .rs-tc:hover{background:var(--sapList_Hover_Background,#f2f3f4)}
-  .rs-tcname{font-weight:500}.rs-tcin{flex:1;font:10px ui-monospace,monospace;color:#8b97b3}
-  .rs-x{border:none;background:transparent;color:#c0392b;cursor:pointer;font-size:14px;padding:0 4px}
+  .rs-tc{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:9px;cursor:pointer;border:1px solid transparent;transition:background .14s,border-color .14s}
+  .rs-tc:hover{background:var(--dg-hover)}.rs-tc.sel{background:var(--dg-sel);border-color:var(--dg-accent-line)}
+  .rs-tcname{font-weight:500}.rs-tcin{flex:1;font:10px var(--dg-mono);color:var(--dg-faint)}
+  .rs-x{border:none;background:transparent;color:var(--dg-danger);cursor:pointer;font-size:14px;padding:0 4px;border-radius:5px}.rs-x:hover{background:color-mix(in srgb,var(--dg-danger) 15%,transparent)}
   .rs-runsum{display:flex;gap:6px;margin:4px 0 8px}
-  .rs-badge{width:fit-content;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:600}
-  .rs-badge.ok{background:rgba(46,125,91,.12);color:#2e7d5b}.rs-badge.warn{background:rgba(217,131,79,.14);color:#b5651d}
-  .rs-node{border:1px solid var(--sapList_BorderColor,#e5e5e5);border-left-width:3px;border-radius:7px;padding:8px 10px;margin-bottom:8px}
-  .rs-node.hit{border-left-color:#2e7d5b}.rs-node.miss{border-left-color:#c0c4c8}.rs-node.fail{border-left-color:#c0392b;background:rgba(217,83,79,.05)}
+  .rs-badge{display:inline-flex;align-items:center;width:fit-content;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid transparent}
+  .rs-badge.ok{background:color-mix(in srgb,var(--dg-ok) 14%,transparent);color:var(--dg-ok);border-color:color-mix(in srgb,var(--dg-ok) 30%,transparent)}
+  .rs-badge.warn{background:color-mix(in srgb,var(--dg-warn) 15%,transparent);color:var(--dg-warn);border-color:color-mix(in srgb,var(--dg-warn) 32%,transparent)}
+  .rs-node{border:1px solid var(--dg-border);border-left-width:3px;border-radius:9px;padding:9px 11px;margin-bottom:8px;background:var(--dg-surface)}
+  .rs-node.hit{border-left-color:var(--dg-ok)}.rs-node.miss{border-left-color:var(--dg-faint)}.rs-node.fail{border-left-color:var(--dg-danger);background:linear-gradient(135deg,color-mix(in srgb,var(--dg-danger) 7%,transparent),transparent 70%),var(--dg-surface)}
   .rs-nodehd{font-weight:600;font-size:12px;display:flex;align-items:center;gap:8px}
-  .rs-tag{font-size:10px;background:#eef1f5;color:#6a6d70;padding:1px 6px;border-radius:8px}
-  .rs-us{margin-left:auto;font-size:10px;color:#8b97b3}
-  .rs-noderow{font-size:11px;color:#6a6d70;margin-top:3px}
-  .rs-case{border:1px solid var(--sapList_BorderColor,#e5e5e5);border-left-width:3px;border-radius:7px;padding:7px 10px;margin-bottom:6px}
-  .rs-case.pass{border-left-color:#2e7d5b}.rs-case.fail{border-left-color:#c0392b}
-  .rs-casehd{font-weight:600;font-size:12px}.rs-diff{font-size:11px;color:#6a6d70;margin-top:3px}.rs-diff code{color:#0a6ed1}
+  .rs-tag{font-size:10px;background:var(--dg-accent-soft);color:var(--dg-accent);padding:1px 7px;border-radius:9px;font-weight:600}
+  .rs-us{margin-left:auto;font-size:10px;color:var(--dg-faint);font-family:var(--dg-mono);font-variant-numeric:tabular-nums}
+  .rs-noderow{font-size:11px;color:var(--dg-muted);margin-top:4px}
+  .rs-case{border:1px solid var(--dg-border);border-left-width:3px;border-radius:9px;padding:8px 11px;margin-bottom:6px;background:var(--dg-surface)}
+  .rs-case.pass{border-left-color:var(--dg-ok)}.rs-case.fail{border-left-color:var(--dg-danger)}
+  .rs-casehd{font-weight:600;font-size:12px}.rs-diff{font-size:11px;color:var(--dg-muted);margin-top:3px}.rs-diff code{color:var(--dg-accent);font-family:var(--dg-mono)}
   `;
 }
 

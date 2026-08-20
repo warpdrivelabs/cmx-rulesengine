@@ -13,13 +13,18 @@
 use serde_json::Value;
 
 pub mod expr;
+pub mod script;
 pub use expr::eval_expression;
+pub use script::{check_script, eval_script, with_functions, ScriptFn};
 
 /// 表达式错误。
 #[derive(Debug, thiserror::Error)]
 pub enum FeelError {
     #[error("语法错误: {0}")]
     Syntax(String),
+    /// 脚本（Rhai）解析 / 求值 / 沙箱错误（SC0）。归因文案含行号。
+    #[error("{0}")]
+    Script(String),
 }
 
 /// 求值一个 unary test：`cell` 文本针对输入值 `value` 判真假；`ctx` 为输入事实（供操作数/裸布尔
@@ -82,6 +87,29 @@ pub fn eval_output(src: &str, ctx: &Value) -> Result<Value, FeelError> {
         return Ok(Value::Null);
     }
     expr::eval_expression(s, ctx)
+}
+
+/// 脚本单元格前缀标记（SC2）：输出格文本以此开头 → 走 Rhai，否则默认 FEEL。
+pub const RHAI_PREFIX: &str = "=rhai:";
+
+/// **按语言分派**求值一个"输出/计算侧"表达式（SC0 脚本能力接缝）。
+///
+/// 这是四载体共用的分派点：
+/// - `lang` = `"feel"` 或 `""`（默认）→ 现有 FEEL 引擎（[`eval_output`]，**零回归**）。
+/// - `lang` = `"rhai"` → Rhai 沙箱求值（[`eval_script`]）。
+///
+/// 另外 sniff [`RHAI_PREFIX`] 前缀（SC2 脚本单元格：`=rhai: ...`）——即便 `lang` 未显式标注，
+/// 前缀标记也强制走 Rhai。这样决策表输出格无需改 IR 结构即可逐格逃生。
+pub fn eval_scripted(lang: &str, src: &str, ctx: &Value) -> Result<Value, FeelError> {
+    // 前缀标记优先（SC2 无 lang 字段的决策表输出格）。
+    if let Some(rest) = src.trim_start().strip_prefix(RHAI_PREFIX) {
+        return eval_script(rest, ctx);
+    }
+    match lang {
+        "rhai" => eval_script(src, ctx),
+        // "feel" | "" | 其它未知 → 默认 FEEL（保守，零回归）。
+        _ => eval_output(src, ctx),
+    }
 }
 
 /// 求值输出字面量表达式（纯字面量，不需上下文）——保留供无 ctx 场景。

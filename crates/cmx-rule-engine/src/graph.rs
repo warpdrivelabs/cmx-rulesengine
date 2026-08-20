@@ -125,6 +125,32 @@ pub fn evaluate_graph(
                     None => trace.push(fail(&node.id, node_ctx, format!("子决策未找到: {key}"))),
                 }
             }
+            "script" => {
+                // 脚本节点（SC1）：以当前累积上下文为变量跑脚本，返回对象合并进上下文。
+                let lang = node.lang.as_deref().unwrap_or("rhai");
+                let src = node.script.as_deref().unwrap_or("");
+                match cmx_rule_feel::eval_scripted(lang, src, &node_ctx) {
+                    Ok(out) => match cmx_rule_feel::script::value_as_object(out, "脚本节点") {
+                        Ok(obj) => {
+                            let out = Value::Object(obj);
+                            merge(&mut context, &out);
+                            trace.push(ok_node(&node.id, "script", node_ctx, out));
+                        }
+                        Err(e) => trace.push(fail_kind(
+                            &node.id,
+                            "script",
+                            node_ctx,
+                            format!("脚本节点 {}：{e}", node.id),
+                        )),
+                    },
+                    Err(e) => trace.push(fail_kind(
+                        &node.id,
+                        "script",
+                        node_ctx,
+                        format!("脚本节点 {}：{e}", node.id),
+                    )),
+                }
+            }
             other => trace.push(fail(&node.id, node_ctx, format!("未知节点类型: {other}"))),
         }
     }
@@ -186,6 +212,19 @@ fn fail(id: &str, input: Value, msg: String) -> TraceNode {
     TraceNode {
         node_id: id.to_string(),
         node_kind: "graph".to_string(),
+        matched_rules: Vec::new(),
+        input,
+        output: Value::Null,
+        timing_us: 0,
+        failure: Some(msg),
+    }
+}
+/// 失败节点但保留其真实 kind（如 "script"），使审计 trace 归因不被误标为 "graph"。
+fn fail_kind(id: &str, kind: &str, input: Value, msg: String) -> TraceNode {
+    tracing::warn!(node = id, kind, "决策图节点失败: {msg}");
+    TraceNode {
+        node_id: id.to_string(),
+        node_kind: kind.to_string(),
         matched_rules: Vec::new(),
         input,
         output: Value::Null,
@@ -282,5 +321,78 @@ mod tests {
         let r = evaluate_graph(&g, &EvalContext::new(json!({})), &NoResolver, 0);
         assert!(r.has_failure());
         assert!(r.trace[0].failure.as_ref().unwrap().contains("环"));
+    }
+
+    // ───────────────────── SC1：决策图 Script 节点 ─────────────────────
+
+    #[test]
+    fn graph_script_node_computes_and_merges() {
+        // input → script(阶梯个税) → output。脚本读 income，返回对象合并进上下文。
+        let g: DecisionGraph = serde_json::from_value(json!({
+            "nodes": [
+                { "id": "in", "type": "input" },
+                { "id": "tax", "name": "阶梯个税", "type": "script", "lang": "rhai",
+                  "script": "let taxable = income - 5000;\nif taxable <= 0 { return #{ tax: 0.0, taxable: 0.0 }; }\nlet t = 0.0;\nlet brackets = [[25000.0, 0.25], [12000.0, 0.20], [3000.0, 0.10], [0.0, 0.03]];\nlet b = taxable;\nfor br in brackets { if b > br[0] { t += (b - br[0]) * br[1]; b = br[0]; } }\n#{ tax: t, taxable: taxable, afterTax: income - t }" },
+                { "id": "out", "type": "output" }
+            ],
+            "edges": [ { "source": "in", "target": "tax" }, { "source": "tax", "target": "out" } ]
+        }))
+        .unwrap();
+        let r = evaluate_graph(&g, &EvalContext::new(json!({ "income": 30000 })), &NoResolver, 0);
+        assert!(!r.has_failure(), "trace: {:?}", r.trace);
+        let out = r.output.as_object().unwrap();
+        assert_eq!(out.get("taxable"), Some(&json!(25000.0)));
+        assert!(out.get("tax").unwrap().as_f64().unwrap() > 0.0);
+        // trace 节点 kind = "script"（审计可解释性）。
+        assert!(r.trace.iter().any(|t| t.node_kind == "script" && t.failure.is_none()));
+    }
+
+    #[test]
+    fn graph_script_node_failure_has_attribution() {
+        // 脚本运行期错误（调用不存在的函数）→ 该节点 failure 带行号，nodeKind 保持 "script"。
+        let g: DecisionGraph = serde_json::from_value(json!({
+            "nodes": [
+                { "id": "in", "type": "input" },
+                { "id": "bad", "type": "script", "script": "let a = 1;\nno_such_fn(a)" },
+                { "id": "out", "type": "output" }
+            ],
+            "edges": [ { "source": "in", "target": "bad" }, { "source": "bad", "target": "out" } ]
+        }))
+        .unwrap();
+        let r = evaluate_graph(&g, &EvalContext::new(json!({})), &NoResolver, 0);
+        assert!(r.has_failure());
+        let bad = r.trace.iter().find(|t| t.node_id == "bad").unwrap();
+        assert_eq!(bad.node_kind, "script");
+        let msg = bad.failure.as_ref().unwrap();
+        assert!(msg.contains("脚本节点 bad"), "归因文案: {msg}");
+    }
+
+    #[test]
+    fn graph_script_node_must_return_object() {
+        // 脚本返回非对象（裸数值）→ 失败归因。
+        let g: DecisionGraph = serde_json::from_value(json!({
+            "nodes": [
+                { "id": "in", "type": "input" },
+                { "id": "s", "type": "script", "script": "42" },
+                { "id": "out", "type": "output" }
+            ],
+            "edges": [ { "source": "in", "target": "s" }, { "source": "s", "target": "out" } ]
+        }))
+        .unwrap();
+        let r = evaluate_graph(&g, &EvalContext::new(json!({})), &NoResolver, 0);
+        assert!(r.has_failure());
+        assert!(r.trace.iter().find(|t| t.node_id == "s").unwrap().failure.as_ref().unwrap().contains("对象"));
+    }
+
+    #[test]
+    fn graph_script_node_missing_script_fails_validation() {
+        // script 节点缺 script → 结构校验失败。
+        let g: DecisionGraph = serde_json::from_value(json!({
+            "nodes": [ { "id": "s", "type": "script" } ],
+            "edges": []
+        }))
+        .unwrap();
+        let r = evaluate_graph(&g, &EvalContext::new(json!({})), &NoResolver, 0);
+        assert!(r.has_failure());
     }
 }

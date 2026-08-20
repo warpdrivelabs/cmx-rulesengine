@@ -85,6 +85,18 @@ where
         .route("/feel/expression", post(handlers::feel_expression))
         .route("/feel/validate", post(handlers::feel_validate))
         .route("/feel/functions", get(handlers::feel_functions))
+        // —— 脚本函数库（SC3）+ 脚本试算 ——
+        .route(
+            "/functions",
+            get(handlers::list_functions).post(handlers::save_function),
+        )
+        .route("/functions/draft", post(handlers::save_function))
+        .route(
+            "/functions/{name}",
+            get(handlers::get_function).delete(handlers::delete_function),
+        )
+        .route("/functions/{name}/publish", post(handlers::publish_function))
+        .route("/script/eval", post(handlers::script_eval))
         // —— 监控大盘数据源 ——
         .route("/stats", get(stats::stats))
 }

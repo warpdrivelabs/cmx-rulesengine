@@ -243,6 +243,103 @@ impl PgDecisionStore {
         let n = self.exec("DELETE FROM cmx_rule_definition WHERE key = $1", vec![k()]).await?;
         Ok(n)
     }
+
+    // ─────────────────── 脚本函数库（SC3，inherent 方法） ───────────────────
+
+    /// upsert 一个脚本函数（草稿态；published 独立经 publish_function 置位）。
+    pub async fn save_function(&self, f: &cmx_rule_model::ScriptFunction) -> StoreResult<()> {
+        let params = serde_json::to_string(&f.params).unwrap_or_else(|_| "[]".into());
+        let now = Utc::now();
+        self.exec(
+            "INSERT INTO cmx_rule_script_function \
+             (name, params, body, lang, version, published, description, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8) \
+             ON CONFLICT (name) DO UPDATE SET params = EXCLUDED.params, body = EXCLUDED.body, \
+             lang = EXCLUDED.lang, description = EXCLUDED.description, updated_at = EXCLUDED.updated_at",
+            vec![
+                DataValue::String(f.name.clone()),
+                DataValue::Json(params),
+                DataValue::String(f.body.clone()),
+                DataValue::String(f.lang.clone()),
+                DataValue::Int(f.version as i64),
+                DataValue::Bool(f.published),
+                DataValue::String(f.description.clone()),
+                DataValue::DateTime(now),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 发布一个脚本函数（置 published=true、version+1）。返回新版本号。
+    pub async fn publish_function(&self, name: &str) -> StoreResult<u32> {
+        let n = self
+            .exec(
+                "UPDATE cmx_rule_script_function \
+                 SET published = TRUE, version = version + 1, updated_at = $2 WHERE name = $1",
+                vec![DataValue::String(name.to_string()), DataValue::DateTime(Utc::now())],
+            )
+            .await?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!("脚本函数 {name} 不存在")));
+        }
+        let ds = self
+            .query(
+                "SELECT version FROM cmx_rule_script_function WHERE name = $1",
+                vec![DataValue::String(name.to_string())],
+                "rule_fn_ver",
+            )
+            .await?;
+        Ok(ds.iter().next().map(|r| get_i64(r, ds.schema.as_ref(), "version")).unwrap_or(1) as u32)
+    }
+
+    /// 列出全部脚本函数（名称升序）。
+    pub async fn list_functions(&self) -> StoreResult<Vec<cmx_rule_model::ScriptFunction>> {
+        let ds = self
+            .query(
+                "SELECT name, params, body, lang, version, published, description, updated_at \
+                 FROM cmx_rule_script_function ORDER BY name",
+                vec![],
+                "rule_fn_list",
+            )
+            .await?;
+        Ok(functions_from_ds(&ds))
+    }
+
+    /// 取已发布的脚本函数（求值前注册用）。
+    pub async fn list_published_functions(&self) -> StoreResult<Vec<cmx_rule_model::ScriptFunction>> {
+        let ds = self
+            .query(
+                "SELECT name, params, body, lang, version, published, description, updated_at \
+                 FROM cmx_rule_script_function WHERE published = TRUE ORDER BY name",
+                vec![],
+                "rule_fn_pub",
+            )
+            .await?;
+        Ok(functions_from_ds(&ds))
+    }
+
+    /// 取一个脚本函数详情（无则 None）。
+    pub async fn get_function(&self, name: &str) -> StoreResult<Option<cmx_rule_model::ScriptFunction>> {
+        let ds = self
+            .query(
+                "SELECT name, params, body, lang, version, published, description, updated_at \
+                 FROM cmx_rule_script_function WHERE name = $1",
+                vec![DataValue::String(name.to_string())],
+                "rule_fn_one",
+            )
+            .await?;
+        Ok(functions_from_ds(&ds).into_iter().next())
+    }
+
+    /// 删除一个脚本函数。返回删除行数（0 = 不存在）。
+    pub async fn delete_function(&self, name: &str) -> StoreResult<u64> {
+        self.exec(
+            "DELETE FROM cmx_rule_script_function WHERE name = $1",
+            vec![DataValue::String(name.to_string())],
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -360,6 +457,34 @@ fn def_from_parts(key: &str, version: u32, body: Value) -> StoreResult<DecisionD
         version,
         body,
     })
+}
+
+/// 由 DataSet 还原脚本函数列表（SC3）。params 为 jsonb 数组；body 为 TEXT。
+fn functions_from_ds(ds: &DataSet) -> Vec<cmx_rule_model::ScriptFunction> {
+    let schema = ds.schema.as_ref();
+    let mut out = Vec::new();
+    for row in ds.iter() {
+        let params = get_json(row, schema, "params")
+            .ok()
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        out.push(cmx_rule_model::ScriptFunction {
+            name: get_string(row, schema, "name").unwrap_or_default(),
+            params,
+            body: get_text(row, schema, "body"),
+            lang: get_opt_string(row, schema, "lang").unwrap_or_else(|| "rhai".into()),
+            version: get_i64(row, schema, "version") as u32,
+            published: get_bool(row, schema, "published"),
+            description: get_text(row, schema, "description"),
+            updated_at: get_opt_ts(row, schema, "updated_at"),
+        });
+    }
+    out
+}
+
+/// 取 TEXT 列（body/description 可能为空串）。
+fn get_text(row: &Row, schema: &Schema, col: &str) -> String {
+    get_opt_string(row, schema, col).unwrap_or_default()
 }
 
 fn opt_str(v: &Option<String>) -> DataValue {

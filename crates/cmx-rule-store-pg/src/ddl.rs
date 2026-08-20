@@ -1,7 +1,7 @@
 //! 规则引擎 PG 表结构 DDL（幂等）。
 //!
 //! 硬约束（对齐 flow store-pg）：`cmx_rule_` 前缀；禁外键，用索引替代；DDL 幂等（IF NOT EXISTS）。
-//! 四表——无 RU 运行表（规则决策无长驻状态）：定义 / 发布 / 决策日志 / 测试用例。
+//! 五表——无 RU 运行表（规则决策无长驻状态）：定义 / 发布 / 决策日志 / 测试用例 / 脚本函数库（SC3）。
 //! 多租户（R3）：per-tenant DB 隔离，故表内不带 tenant 列（库即租户边界）。
 
 /// 建表 DDL（幂等）。按顺序执行。
@@ -56,4 +56,17 @@ pub const DDL_STATEMENTS: &[&str] = &[
         created_at   TIMESTAMPTZ  NOT NULL
     )"#,
     "CREATE INDEX IF NOT EXISTS idx_cmx_rule_test_key ON cmx_rule_test_case (decision_key)",
+    // —— 脚本函数库（SC3）：可复用 Rhai 函数，决策表/图/脚本决策/FEEL 皆可调；求值前注册进引擎 ——
+    r#"CREATE TABLE IF NOT EXISTS cmx_rule_script_function (
+        name         VARCHAR(128) PRIMARY KEY,
+        params       JSONB        NOT NULL DEFAULT '[]',
+        body         TEXT         NOT NULL,
+        lang         VARCHAR(16)  NOT NULL DEFAULT 'rhai',
+        version      INTEGER      NOT NULL DEFAULT 1,
+        published    BOOLEAN      NOT NULL DEFAULT FALSE,
+        description  TEXT         NOT NULL DEFAULT '',
+        created_at   TIMESTAMPTZ  NOT NULL,
+        updated_at   TIMESTAMPTZ  NOT NULL
+    )"#,
+    "CREATE INDEX IF NOT EXISTS idx_cmx_rule_scriptfn_published ON cmx_rule_script_function (published)",
 ];

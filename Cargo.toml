@@ -65,6 +65,9 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 # DMN XML 解析（R2）
 roxmltree = "0.20"
+# 脚本能力（SC0）：过程式逃生舱。sync=Send+Sync 契合引擎；serde=Dynamic↔serde_json::Value 桥接。
+# rhai-1.20.0 已离线缓存；Don't-Panic 保证 + 原生沙箱（max_operations/call_levels/超时钩子）。
+rhai = { version = "1.20", features = ["serde", "sync"] }
 tokio = { version = "1.41", features = ["full"] }
 axum = { version = "0.8.9", features = ["macros", "multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-full", "timeout", "limit"] }

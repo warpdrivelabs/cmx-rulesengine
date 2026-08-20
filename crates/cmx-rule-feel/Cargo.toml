@@ -15,6 +15,8 @@ authors.workspace = true
 cmx-rule-model = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# 脚本引擎（SC0）：FEEL 之外的过程式逃生舱（Script 节点 / 脚本单元格 / 函数库 / 脚本决策）。
+rhai = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

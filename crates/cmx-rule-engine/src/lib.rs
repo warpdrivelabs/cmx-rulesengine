@@ -39,6 +39,46 @@ pub fn evaluate_with(
             }
         }
         DecisionBody::Graph(g) => graph::evaluate_graph(g, ctx, resolver, depth),
+        DecisionBody::Script(s) => evaluate_script_body(s, ctx),
+    }
+}
+
+/// 求值脚本决策体（SC4）：以输入事实各字段为变量跑脚本，返回对象即输出，产 1 个 TraceNode。
+fn evaluate_script_body(s: &cmx_rule_model::ScriptBody, ctx: &EvalContext) -> EvalResult {
+    let input = ctx.input.clone();
+    let node = match cmx_rule_feel::eval_scripted(&s.lang, &s.script, &input) {
+        Ok(out) => match cmx_rule_feel::script::value_as_object(out, "脚本决策") {
+            Ok(obj) => TraceNode {
+                node_id: "script".to_string(),
+                node_kind: "script".to_string(),
+                matched_rules: Vec::new(),
+                input: input.clone(),
+                output: Value::Object(obj),
+                timing_us: 0,
+                failure: None,
+            },
+            Err(e) => script_fail_node(input, format!("脚本决策：{e}")),
+        },
+        Err(e) => script_fail_node(input, format!("脚本决策：{e}")),
+    };
+    let output = node.output.clone();
+    EvalResult {
+        output,
+        trace: vec![node],
+    }
+}
+
+/// 脚本决策失败节点（nodeKind 保持 "script"）。
+fn script_fail_node(input: Value, msg: String) -> TraceNode {
+    tracing::warn!("脚本决策求值失败: {msg}");
+    TraceNode {
+        node_id: "script".to_string(),
+        node_kind: "script".to_string(),
+        matched_rules: Vec::new(),
+        input,
+        output: Value::Null,
+        timing_us: 0,
+        failure: Some(msg),
     }
 }
 
@@ -65,6 +105,13 @@ pub fn analyze_def(def: &DecisionDef) -> CoverageReport {
             }
             report
         }
+        // §9：脚本是黑盒，gap/overlap 无法穿透——**显式告知**（不静默返回空 = 假"完整"）。
+        DecisionBody::Script(_) => CoverageReport {
+            gaps: vec![cmx_rule_model::Gap {
+                description: "脚本决策为黑盒，不参与完整性分析（gap/overlap 无法对任意脚本做区域推理）".into(),
+            }],
+            overlaps: Vec::new(),
+        },
     }
 }
 
@@ -138,11 +185,14 @@ pub fn any_rule_matches(table: &DecisionTable, ctx: &EvalContext) -> bool {
 }
 
 /// 求值一条命中规则行的输出对象（各输出列为完整 FEEL 表达式，可引用输入事实）。
+///
+/// SC2：输出格支持脚本单元格——文本以 `=rhai:` 前缀标记则走 Rhai，否则默认 FEEL（零回归）。
+/// 判定侧（inputEntries）**不受影响**，仍是纯 FEEL unary test，保 gap/overlap 完整性分析有效。
 fn row_output(table: &DecisionTable, rule: &DecisionRule, ctx: &EvalContext) -> Result<Value, String> {
     let mut obj = serde_json::Map::new();
     for (ci, out) in table.outputs.iter().enumerate() {
         let expr = &rule.output_entries[ci];
-        let v = cmx_rule_feel::eval_output(expr, &ctx.input)
+        let v = cmx_rule_feel::eval_scripted("", expr, &ctx.input)
             .map_err(|e| format!("输出列 {:?} 表达式 {:?} —— {e}", out.name, expr))?;
         obj.insert(out.name.clone(), v);
     }
@@ -367,5 +417,123 @@ mod tests {
         assert_eq!(r.trace.len(), 1);
         assert!(!r.has_failure());
         assert_eq!(r.output, json!({ "tier": "A" }));
+    }
+
+    // ───────────────────── SC2：决策表脚本单元格（=rhai: 前缀） ─────────────────────
+
+    #[test]
+    fn script_output_cell_computes() {
+        // 输出格用 =rhai: 前缀跑脚本；判定侧仍是 FEEL unary test。
+        let t: DecisionTable = serde_json::from_value(json!({
+            "hitPolicy": "F",
+            "inputs": [ { "expression": "income" } ],
+            "outputs": [ { "name": "bonus" } ],
+            "rules": [
+                { "inputEntries": ["> 5000"], "outputEntries": ["=rhai: let b = income * 0.1; if income > 10000 { b * 1.5 } else { b }"] },
+                { "inputEntries": ["-"], "outputEntries": ["0"] }
+            ]
+        }))
+        .unwrap();
+        // income=20000 → 命中行0 → 20000*0.1*1.5 = 3000
+        assert_eq!(eval(&t, json!({ "income": 20000 })).output, json!({ "bonus": 3000.0 }));
+        // income=8000 → 命中行0 → 8000*0.1 = 800（未过 10000 阈值）
+        assert_eq!(eval(&t, json!({ "income": 8000 })).output, json!({ "bonus": 800.0 }));
+        // income=3000 → 命中行1（通配）→ FEEL 字面量 0，零回归
+        assert_eq!(eval(&t, json!({ "income": 3000 })).output, json!({ "bonus": 0.0 }));
+    }
+
+    #[test]
+    fn feel_output_cell_unchanged_by_sc2() {
+        // 无前缀的输出格仍走 FEEL，byte-identical（零回归）。
+        let t: DecisionTable = serde_json::from_value(json!({
+            "hitPolicy": "F",
+            "inputs": [ { "expression": "x" } ],
+            "outputs": [ { "name": "y" } ],
+            "rules": [ { "inputEntries": ["-"], "outputEntries": ["x * 5"] } ]
+        }))
+        .unwrap();
+        assert_eq!(eval(&t, json!({ "x": 4 })).output, json!({ "y": 20.0 }));
+    }
+
+    // ───────────────────── SC4：脚本化子决策（kind: "script"） ─────────────────────
+
+    #[test]
+    fn script_decision_evaluates() {
+        // 整个决策就是一段脚本：输入事实 → 输出对象。
+        let def: DecisionDef = serde_json::from_value(json!({
+            "key": "dynamic_pricing", "name": "动态定价", "kind": "script", "lang": "rhai",
+            "script": "let price = base_price;\nif demand > 0.8 { price *= 1.3; } else if demand < 0.3 { price *= 0.85; }\nif is_member { price *= 0.9; }\n#{ finalPrice: price, surge: demand > 0.8 }"
+        }))
+        .unwrap();
+        let r = evaluate(&def, &EvalContext::new(json!({ "base_price": 100, "demand": 0.9, "is_member": true })));
+        assert!(!r.has_failure(), "trace: {:?}", r.trace);
+        // 100 * 1.3 * 0.9 = 117
+        assert_eq!(r.output.get("finalPrice"), Some(&json!(117.0)));
+        assert_eq!(r.output.get("surge"), Some(&json!(true)));
+        assert_eq!(r.trace.len(), 1);
+        assert_eq!(r.trace[0].node_kind, "script");
+    }
+
+    #[test]
+    fn script_decision_failure_attribution() {
+        let def: DecisionDef = serde_json::from_value(json!({
+            "key": "bad", "kind": "script", "script": "let a = 1;\nboom(a)"
+        }))
+        .unwrap();
+        let r = evaluate(&def, &EvalContext::new(json!({})));
+        assert!(r.has_failure());
+        assert_eq!(r.trace[0].node_kind, "script");
+        assert!(r.trace[0].failure.as_ref().unwrap().contains("脚本决策"));
+    }
+
+    #[test]
+    fn script_decision_default_lang_is_rhai() {
+        // 不写 lang 默认 rhai。
+        let def: DecisionDef = serde_json::from_value(json!({
+            "key": "d", "kind": "script", "script": "#{ ok: x + 1 }"
+        }))
+        .unwrap();
+        let r = evaluate(&def, &EvalContext::new(json!({ "x": 41 })));
+        assert_eq!(r.output.get("ok"), Some(&json!(42.0)));
+    }
+
+    #[test]
+    fn script_decision_analyze_is_explicit() {
+        // §9：脚本决策 analyze 显式返回"不参与完整性分析"（非静默空）。
+        let def: DecisionDef = serde_json::from_value(json!({
+            "key": "d", "kind": "script", "script": "#{ ok: true }"
+        }))
+        .unwrap();
+        let report = analyze_def(&def);
+        assert!(!report.gaps.is_empty());
+        assert!(report.gaps[0].description.contains("脚本决策"));
+    }
+
+    #[test]
+    fn script_decision_referenced_by_graph_decision_node() {
+        // 脚本决策可被决策图 decision 节点引用（融入现有编排）。
+        let main: DecisionDef = serde_json::from_value(json!({
+            "key": "main", "kind": "graph",
+            "nodes": [
+                { "id": "in", "type": "input" },
+                { "id": "price", "type": "decision", "decisionKey": "pricing" },
+                { "id": "out", "type": "output" }
+            ],
+            "edges": [ { "source": "in", "target": "price" }, { "source": "price", "target": "out" } ]
+        }))
+        .unwrap();
+        let pricing: DecisionDef = serde_json::from_value(json!({
+            "key": "pricing", "kind": "script",
+            "script": "#{ finalPrice: base_price * 1.1 }"
+        }))
+        .unwrap();
+        let mut map = std::collections::HashMap::new();
+        map.insert("pricing".to_string(), pricing);
+        let resolver = MapResolver(map);
+        let r = evaluate_with(&main, &EvalContext::new(json!({ "base_price": 200 })), &resolver, 0);
+        assert!(!r.has_failure(), "trace: {:?}", r.trace);
+        // 200 * 1.1 = 220.000…03（f64 精度，与 FEEL 引擎同偏差——设计方案 §14 已披露）。用容差判定。
+        let fp = r.output.get("finalPrice").and_then(|v| v.as_f64()).unwrap();
+        assert!((fp - 220.0).abs() < 1e-9, "finalPrice = {fp}");
     }
 }

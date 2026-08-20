@@ -41,6 +41,7 @@ pub async fn get_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Valu
 pub async fn save_draft(Json(def): Json<DecisionDef>) -> Result<Json<ApiResp<Value>>> {
     def.validate()
         .map_err(|e| RuleError::business(format!("决策定义非法: {e}")))?;
+    check_scripts(&def).map_err(RuleError::business)?;
     let tenant = current_tenant();
     store()
         .save_definition(&tenant, &def)
@@ -49,14 +50,54 @@ pub async fn save_draft(Json(def): Json<DecisionDef>) -> Result<Json<ApiResp<Val
     Ok(Json(ApiResp::ok(json!({ "key": def.key, "saved": true }))))
 }
 
-/// POST /definitions/validate —— 结构 + 单元格语法校验（不落库）。
+/// POST /definitions/validate —— 结构 + 单元格 + 脚本语法校验（不落库）。
 pub async fn validate_definition(Json(def): Json<DecisionDef>) -> Result<Json<ApiResp<Value>>> {
     if let Err(e) = def.validate() {
         return Ok(Json(ApiResp::ok(
             json!({ "valid": false, "error": e.to_string() }),
         )));
     }
+    if let Err(e) = check_scripts(&def) {
+        return Ok(Json(ApiResp::ok(json!({ "valid": false, "error": e }))));
+    }
     Ok(Json(ApiResp::ok(json!({ "valid": true }))))
+}
+
+/// 编译校验定义内的全部脚本（SC0–SC4）——落库/校验前暴露语法错（带行号），不执行。
+/// 覆盖三载体：脚本决策（kind:script）、决策图 script 节点、决策表 `=rhai:` 输出格。
+fn check_scripts(def: &DecisionDef) -> std::result::Result<(), String> {
+    match &def.body {
+        DecisionBody::Script(s) => cmx_rule_feel::check_script(&s.script)
+            .map_err(|e| format!("脚本决策语法错误: {e}")),
+        DecisionBody::Graph(g) => {
+            for n in &g.nodes {
+                if n.node_type == "script"
+                    && let Some(src) = &n.script
+                {
+                    cmx_rule_feel::check_script(src)
+                        .map_err(|e| format!("脚本节点 {}: {e}", n.id))?;
+                }
+                if let Some(t) = &n.table {
+                    check_table_scripts(t).map_err(|e| format!("[{}] {e}", n.id))?;
+                }
+            }
+            Ok(())
+        }
+        DecisionBody::DecisionTable(t) => check_table_scripts(t),
+    }
+}
+
+/// 校验决策表输出格里的 `=rhai:` 脚本单元格（SC2）。
+fn check_table_scripts(t: &cmx_rule_model::DecisionTable) -> std::result::Result<(), String> {
+    for (ri, rule) in t.rules.iter().enumerate() {
+        for cell in &rule.output_entries {
+            if let Some(src) = cell.trim_start().strip_prefix(cmx_rule_feel::RHAI_PREFIX) {
+                cmx_rule_feel::check_script(src)
+                    .map_err(|e| format!("规则行 {ri} 脚本输出格: {e}"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 // ————————————————————————— 求值（核心） —————————————————————————
@@ -128,7 +169,11 @@ async fn run_and_respond(
     let ctx = EvalContext::new(req.input.clone());
     // 决策图含子决策时预加载解析器（BFS）；决策表则空解析器。
     let resolver = build_resolver(tenant, &def).await;
-    let result = cmx_rule_engine::evaluate_with(&def, &ctx, &resolver, 0);
+    // SC3：预取租户已发布脚本函数，注入本次求值（同步 evaluate 全程 thread_local 稳定，用后自动恢复）。
+    let funcs = load_script_functions(tenant).await;
+    let result = cmx_rule_feel::with_functions(funcs, || {
+        cmx_rule_engine::evaluate_with(&def, &ctx, &resolver, 0)
+    });
     let elapsed_us = (Utc::now() - started).num_microseconds().unwrap_or(0).max(0) as u64;
 
     // 失败归因（若有任一节点失败）。
@@ -260,8 +305,102 @@ async fn build_resolver(tenant: &str, def: &DecisionDef) -> cmx_rule_engine::Map
 fn keys_of(def: &DecisionDef) -> Vec<String> {
     match &def.body {
         DecisionBody::Graph(g) => cmx_rule_engine::collect_decision_keys(g),
-        DecisionBody::DecisionTable(_) => Vec::new(),
+        // 决策表 / 脚本决策不引用子决策。
+        DecisionBody::DecisionTable(_) | DecisionBody::Script(_) => Vec::new(),
     }
+}
+
+// ————————————————————————— 脚本函数库（SC3） —————————————————————————
+
+/// 预取租户已发布脚本函数，映射为 feel 层的 [`cmx_rule_feel::ScriptFn`]（求值前注入）。
+/// 失败降级为空库（不阻断求值——函数缺失时脚本会以"未定义函数"归因，可诊断）。
+async fn load_script_functions(tenant: &str) -> Vec<cmx_rule_feel::ScriptFn> {
+    match store().list_published_functions().await {
+        Ok(list) => list
+            .into_iter()
+            .map(|f| cmx_rule_feel::ScriptFn::from_parts(&f.name, &f.params, &f.body))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(tenant, error = %e, "预取脚本函数失败，本次求值不注入函数库");
+            Vec::new()
+        }
+    }
+}
+
+/// GET /functions —— 脚本函数列表。
+pub async fn list_functions() -> Result<Json<ApiResp<Value>>> {
+    let list = store()
+        .list_functions()
+        .await
+        .map_err(|e| RuleError::internal(format!("列出脚本函数失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!(list))))
+}
+
+/// GET /functions/{name} —— 函数详情。
+pub async fn get_function(Path(name): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let f = store()
+        .get_function(&name)
+        .await
+        .map_err(|e| RuleError::internal(format!("装载脚本函数失败: {e}")))?
+        .ok_or_else(|| RuleError::not_found(format!("脚本函数 {name} 不存在")))?;
+    Ok(Json(ApiResp::ok(json!(f))))
+}
+
+/// POST /functions/draft —— 存草稿（含 Rhai 编译校验）。
+pub async fn save_function(Json(f): Json<cmx_rule_model::ScriptFunction>) -> Result<Json<ApiResp<Value>>> {
+    if f.name.trim().is_empty() {
+        return Err(RuleError::business("脚本函数名不可为空"));
+    }
+    // 编译校验（把函数体包装成 fn 声明后 compile，暴露语法错带行号）。
+    let sf = cmx_rule_feel::ScriptFn::from_parts(&f.name, &f.params, &f.body);
+    cmx_rule_feel::check_script(&sf.source)
+        .map_err(|e| RuleError::business(format!("脚本函数语法错误: {e}")))?;
+    store()
+        .save_function(&f)
+        .await
+        .map_err(|e| RuleError::internal(format!("保存脚本函数失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "name": f.name, "saved": true }))))
+}
+
+/// POST /functions/{name}/publish —— 发布（求值只注册已发布函数）。
+pub async fn publish_function(Path(name): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let version = store()
+        .publish_function(&name)
+        .await
+        .map_err(|e| RuleError::business(format!("发布脚本函数失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "name": name, "version": version, "published": true }))))
+}
+
+/// DELETE /functions/{name} —— 删除。
+pub async fn delete_function(Path(name): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let n = store()
+        .delete_function(&name)
+        .await
+        .map_err(|e| RuleError::internal(format!("删除脚本函数失败: {e}")))?;
+    if n == 0 {
+        return Err(RuleError::not_found(format!("脚本函数 {name} 不存在")));
+    }
+    Ok(Json(ApiResp::ok(json!({ "name": name, "deleted": true }))))
+}
+
+/// POST /script/eval —— 脚本试算（沙箱执行，供设计器调试；对标 /feel/expression）。
+pub async fn script_eval(Json(req): Json<ScriptEvalReq>) -> Result<Json<ApiResp<Value>>> {
+    let ctx = req.context.unwrap_or_else(|| json!({}));
+    let tenant = current_tenant();
+    let funcs = load_script_functions(&tenant).await;
+    let out = cmx_rule_feel::with_functions(funcs, || cmx_rule_feel::eval_script(&req.script, &ctx))
+        .map_err(|e| RuleError::business(format!("脚本错误: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "result": out }))))
+}
+
+/// script/eval 请求体。
+#[derive(Deserialize)]
+pub struct ScriptEvalReq {
+    /// Rhai 脚本源。
+    pub script: String,
+    /// 可选：输入上下文（脚本变量）。
+    #[serde(default)]
+    pub context: Option<Value>,
 }
 
 // ————————————————————————— 发布 / 版本（F1） —————————————————————————

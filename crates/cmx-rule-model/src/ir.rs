@@ -170,7 +170,7 @@ pub struct GraphNode {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    /// 节点类型："input" | "output" | "decisionTable" | "expression" | "decision"。
+    /// 节点类型："input" | "output" | "decisionTable" | "expression" | "decision" | "script"。
     #[serde(rename = "type")]
     pub node_type: String,
     /// decisionTable 节点：内嵌决策表。
@@ -182,6 +182,12 @@ pub struct GraphNode {
     /// decision 节点：被引用的子决策 key。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_key: Option<String>,
+    /// script 节点（SC1）：脚本语言（默认 "rhai"）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    /// script 节点（SC1）：脚本体（读累积上下文 → 返回对象合并进上下文）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 /// expression 节点的一条字段映射：`key` = FEEL 表达式求值结果。
@@ -227,6 +233,39 @@ impl DecisionGraph {
                     }
                 }
             }
+            if n.node_type == "script" && n.script.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(crate::Error::Definition(format!("脚本节点 {} 缺 script", n.id)));
+            }
+        }
+        Ok(())
+    }
+}
+
+// ═══════════════════════ 脚本化子决策（SC4，第三类决策体）═══════════════════════
+//
+// 整个决策体就是一段脚本：输入事实 → 脚本 → 输出对象。对标"整个规则就是一段代码"。
+// 与 DecisionTable / DecisionGraph 平级，可被决策图 decision 节点引用、被测试回归、被审计。
+
+/// 脚本决策体（SC4）。序列化为 `{"kind":"script", "lang":"rhai", "script":"..."}`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptBody {
+    /// 脚本语言（默认 "rhai"）。
+    #[serde(default = "default_lang")]
+    pub lang: String,
+    /// 脚本体：以输入事实各字段为变量，返回对象即决策输出。
+    pub script: String,
+}
+
+fn default_lang() -> String {
+    "rhai".to_string()
+}
+
+impl ScriptBody {
+    /// 结构自检：脚本非空。
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.script.trim().is_empty() {
+            return Err(crate::Error::Definition("脚本决策的 script 不可为空".into()));
         }
         Ok(())
     }

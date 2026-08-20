@@ -17,12 +17,12 @@ pub mod ir;
 pub mod store;
 
 pub use analyze::{CoverageReport, Gap, Overlap};
-pub use def::{DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, ReleaseMeta, TestCase};
+pub use def::{DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, ReleaseMeta, ScriptFunction, TestCase};
 pub use error::{Error, Result, StoreError, StoreResult};
 pub use eval::{EvalContext, EvalResult, TraceNode};
 pub use ir::{
     DecisionGraph, DecisionRule, DecisionTable, ExprMapping, GraphEdge, GraphNode, HitPolicy,
-    InputClause, OutputClause,
+    InputClause, OutputClause, ScriptBody,
 };
 pub use store::DecisionStore;
 
@@ -112,7 +112,7 @@ mod tests {
                 assert_eq!(t.hit_policy, HitPolicy::First);
                 assert_eq!(t.inputs.len(), 1);
             }
-            DecisionBody::Graph(_) => panic!("应为决策表"),
+            _ => panic!("应为决策表"),
         }
         // 往返回 JSON：kind 标签仍在。
         let back = serde_json::to_value(&def).unwrap();

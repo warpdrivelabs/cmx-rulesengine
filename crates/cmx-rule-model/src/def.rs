@@ -1,11 +1,11 @@
 //! 决策定义 / 元数据 / 决策日志 DTO（引擎 ↔ 存储 ↔ API 流转单元）。
 
-use crate::ir::{DecisionGraph, DecisionTable};
+use crate::ir::{DecisionGraph, DecisionTable, ScriptBody};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// 决策体：一个决策"是什么"。R0 单决策表；R2 加 `Graph`（JDM 式 DAG）。
+/// 决策体：一个决策"是什么"。R0 单决策表；R2 加 `Graph`（JDM 式 DAG）；SC4 加 `Script`（脚本决策）。
 ///
 /// internally tagged（`kind` 字段）——与 GoRules JDM 的节点类型标注同构。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +17,9 @@ pub enum DecisionBody {
     /// 决策图（R2，JDM 式 DAG）。序列化为 `{"kind":"graph", "nodes":[…], "edges":[…]}`。
     #[serde(rename = "graph")]
     Graph(DecisionGraph),
+    /// 脚本决策（SC4）。序列化为 `{"kind":"script", "lang":"rhai", "script":"…"}`。
+    #[serde(rename = "script")]
+    Script(ScriptBody),
 }
 
 /// 决策定义（设计器产物 / 引擎输入）。
@@ -45,6 +48,7 @@ impl DecisionDef {
         match &self.body {
             DecisionBody::DecisionTable(t) => t.validate(),
             DecisionBody::Graph(g) => g.validate(),
+            DecisionBody::Script(s) => s.validate(),
         }
     }
 }
@@ -120,4 +124,38 @@ pub struct TestCase {
     /// 期望输出（决策的 output）。
     pub expected: Value,
     pub created_at: DateTime<Utc>,
+}
+
+/// 脚本函数库条目（`cmx_rule_script_function` 一行，SC3）——可复用 Rhai 函数。
+///
+/// 求值前引擎把租户的**已发布**函数注册进 Rhai `Engine`，决策表/图/脚本决策皆可 `name(args)` 调用。
+/// `name` 为调用标识（PK）；`params` 供设计器提示（求值实际以脚本体 fn 声明为准）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptFunction {
+    /// 函数名（调用标识 + PK）。
+    pub name: String,
+    /// 参数名数组（设计器提示用）。
+    #[serde(default)]
+    pub params: Vec<String>,
+    /// 脚本体（Rhai）。P2：以 `fn name(params) { ... }` 声明，或裸表达式（按 params 包装）。
+    pub body: String,
+    /// 语言（默认 "rhai"）。
+    #[serde(default = "default_script_lang")]
+    pub lang: String,
+    /// 版本。
+    #[serde(default = "default_version")]
+    pub version: u32,
+    /// 是否已发布（求值只注册已发布函数）。
+    #[serde(default)]
+    pub published: bool,
+    /// 说明。
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+fn default_script_lang() -> String {
+    "rhai".to_string()
 }

@@ -1,0 +1,8 @@
+{
+  "header": { "docNo": "EC-20260822-007", "compUnit": "1000", "claimDate": "2026-08-22",
+    "employeeId": "E1001", "summary": "张三差旅报销", "costCenter": "CC01" },
+  "details": [
+    { "seq": 1, "expenseType": "TRAVEL", "amount": 800, "costCenter": "CC01" },
+    { "seq": 2, "expenseType": "MEAL",   "amount": 200, "costCenter": "CC01" }
+  ]
+}

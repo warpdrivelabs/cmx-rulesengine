@@ -1,0 +1,25 @@
+{
+  "docType": "PAYMENT",
+  "bizEvent": "SUPPLIER_PAYMENT",
+  "top": {
+    "compUnit": "header.compUnit",
+    "postingDate": "header.payDate",
+    "period": { "const": "2026-08" },
+    "currency": { "path": "header.currency", "default": "CNY" }
+  },
+  "header": {
+    "docNo": "header.docNo",
+    "summary": "header.summary",
+    "supplierId": "header.supplierId",
+    "payMethod": "header.payMethod"
+  },
+  "lines": {
+    "from": "allocations",
+    "map": { "invoiceNo": "invoiceNo", "amount": "amount" }
+  },
+  "amounts": {
+    "payable": { "op": "sum", "over": "lines", "amount": "amount" },
+    "total":   { "op": "add", "of": ["payable"] }
+  },
+  "dims": {}
+}

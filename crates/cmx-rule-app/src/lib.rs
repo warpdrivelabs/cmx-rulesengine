@@ -57,6 +57,12 @@ where
             "/definitions/{key}",
             get(handlers::get_definition).delete(handlers::delete_definition),
         )
+        // —— 分类字典（受管；决策集按 category_code 引用，前端按分类分组）——
+        .route(
+            "/categories",
+            get(handlers::list_categories).post(handlers::save_category),
+        )
+        .route("/categories/{code}", delete(handlers::delete_category))
         // —— 发布 / 版本（F1）——
         .route("/definitions/{key}/publish", post(handlers::publish_definition))
         .route("/definitions/{key}/versions", get(handlers::list_versions))

@@ -1,0 +1,8 @@
+{
+  "header": { "docNo": "PI-20260822-001", "compUnit": "1000", "invoiceDate": "2026-08-22",
+    "currency": "CNY", "supplierId": "V0001", "summary": "采购A物料+运费", "costCenter": "CC01" },
+  "lines": [
+    { "lineNo": 1, "itemType": "STOCK",   "matGroup": "RAW", "taxCode": "J1", "netAmount": 10000, "taxAmount": 1300 },
+    { "lineNo": 2, "itemType": "EXPENSE", "matGroup": "",    "taxCode": "J1", "netAmount": 2000,  "taxAmount": 260, "costCenter": "CC01" }
+  ]
+}

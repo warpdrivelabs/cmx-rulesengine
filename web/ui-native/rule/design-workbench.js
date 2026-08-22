@@ -21,7 +21,7 @@ const CFG = {
 export function configure(o) { Object.assign(CFG, o || {}); return CFG; }
 
 // ── 模块级状态（单实例页；跨区靠 state + refreshView）──
-const state = { list: [], selectedKey: null, detail: null, analysis: null, loadingKey: null, creating: false, gNode: null, gEdge: null, search: '', page: 1, hosts: new Set() };
+const state = { list: [], categories: [], collapsed: {}, managingCats: false, selectedKey: null, detail: null, analysis: null, loadingKey: null, creating: false, gNode: null, gEdge: null, search: '', page: 1, hosts: new Set() };
 const PAGE_SIZE = 12;
 // 过滤（按名称/键，不分大小写）+ 分页，返回当前页项 + 元信息。
 function visibleList() {
@@ -32,6 +32,23 @@ function visibleList() {
   const page = Math.min(Math.max(1, state.page), pages);
   const start = (page - 1) * PAGE_SIZE;
   return { items: filtered.slice(start, start + PAGE_SIZE), total, pages, page, filteredTotal: total };
+}
+// 过滤（同 visibleList）后按分类分桶，组顺序取分类字典 ord，未分类置底。用于「按分类分组折叠」。
+function groupedList() {
+  const q = (state.search || '').trim().toLowerCase();
+  const filtered = q ? state.list.filter(d => (d.name || '').toLowerCase().includes(q) || (d.key || '').toLowerCase().includes(q)) : state.list;
+  const cats = state.categories || [];
+  const known = new Set(cats.map(c => c.code));
+  const buckets = new Map();
+  for (const d of filtered) {
+    const code = (d.categoryCode && known.has(d.categoryCode)) ? d.categoryCode : ''; // 未知/空 → 未分类
+    if (!buckets.has(code)) buckets.set(code, []);
+    buckets.get(code).push(d);
+  }
+  const groups = [];
+  for (const c of cats) if (buckets.has(c.code)) groups.push({ code: c.code, name: c.name || c.code, items: buckets.get(c.code) });
+  if (buckets.has('')) groups.push({ code: '', name: '未分类', items: buckets.get('') }); // 置底
+  return { groups, filteredTotal: filtered.length };
 }
 
 // ── 信封解包 fetch ──
@@ -50,7 +67,13 @@ async function apiJson(url, options = {}) {
 
 // ── 数据加载 ──
 async function loadList() {
-  try { state.list = await apiJson('/api/rules/v1/definitions') || []; }
+  try {
+    const [list, cats] = await Promise.all([
+      apiJson('/api/rules/v1/definitions'),
+      apiJson('/api/rules/v1/categories').catch(() => []),
+    ]);
+    state.list = list || []; state.categories = cats || [];
+  }
   catch (e) { state.list = []; console.warn('装载决策集失败', e); }
   refreshView('explorer');
 }
@@ -101,6 +124,8 @@ async function createDecision(root) {
         outputs: [{ id: 'o1', name: 'result', label: '结果' }],
         rules: [{ id: 'r1', inputEntries: ['-'], outputEntries: ['""'] }],
       };
+  const catCode = (root.querySelector('#nc-cat')?.value || '').trim();
+  if (catCode) skeleton.categoryCode = catCode;
   try {
     await apiJson('/api/rules/v1/definitions/draft', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(skeleton),
@@ -125,6 +150,56 @@ async function deleteDecision(key) {
   await loadList();
   refreshView('content'); refreshView('property');
   flash(`已删除「${label}」`);
+}
+
+// ── 分类：改选中决策集所属分类（元数据；取完整 def → 覆盖 categoryCode → 重存草稿，不改版本/发布态）──
+async function recategorize(newCode) {
+  const key = state.selectedKey; if (!key) return;
+  const meta = state.list.find(x => x.key === key) || {};
+  let def; try { def = await apiJson('/api/rules/v1/definitions/' + encodeURIComponent(key)); }
+  catch (e) { flash('读取定义失败: ' + e.message, true); return; }
+  def.name = def.name || meta.name || key;
+  if (newCode) def.categoryCode = newCode; else delete def.categoryCode;
+  try {
+    await apiJson('/api/rules/v1/definitions/draft', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(def) });
+  } catch (e) { flash('改分类失败: ' + e.message, true); return; }
+  await loadList(); refreshView('property');
+  flash('已更新分类');
+}
+
+// ── 分类字典管理（受管 CRUD：新增 / 重命名 / 上下移 / 删除）──
+async function saveCategory(cat) {
+  await apiJson('/api/rules/v1/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cat) });
+}
+async function catAdd(root) {
+  const code = slugify(root.querySelector('#cat-new-code')?.value || '') || slugify(root.querySelector('#cat-new-name')?.value || '');
+  const name = (root.querySelector('#cat-new-name')?.value || '').trim();
+  if (!code) { flash('请填写分类 code 或名称', true); return; }
+  if ((state.categories || []).some(c => c.code === code)) { flash(`分类「${code}」已存在`, true); return; }
+  const ord = (state.categories || []).reduce((m, c) => Math.max(m, c.ord || 0), 0) + 1;
+  try { await saveCategory({ code, name: name || code, ord }); } catch (e) { flash('新增分类失败: ' + e.message, true); return; }
+  await loadList(); flash(`已新增分类「${name || code}」`);
+}
+async function catRename(code, name) {
+  const c = (state.categories || []).find(x => x.code === code); if (!c || (c.name || '') === name) return;
+  try { await saveCategory({ code, name, ord: c.ord || 0 }); } catch (e) { flash('重命名失败: ' + e.message, true); return; }
+  await loadList();
+}
+async function catMove(code, dir) {
+  const cats = [...(state.categories || [])]; // 已按 ord 升序
+  const i = cats.findIndex(c => c.code === code); if (i < 0) return;
+  const j = dir === 'up' ? i - 1 : i + 1; if (j < 0 || j >= cats.length) return;
+  const a = cats[i], b = cats[j], ao = a.ord || 0, bo = b.ord || 0;
+  try { await saveCategory({ code: a.code, name: a.name || a.code, ord: bo }); await saveCategory({ code: b.code, name: b.name || b.code, ord: ao }); }
+  catch (e) { flash('排序失败: ' + e.message, true); return; }
+  await loadList();
+}
+async function catDelete(code) {
+  const c = (state.categories || []).find(x => x.code === code);
+  if (!confirm(`确认删除分类「${c ? (c.name || c.code) : code}」？\n引用它的决策集将归入「未分类」。`)) return;
+  try { await apiJson('/api/rules/v1/categories/' + encodeURIComponent(code), { method: 'DELETE' }); }
+  catch (e) { flash('删除分类失败: ' + e.message, true); return; }
+  await loadList(); flash('已删除分类');
 }
 
 // ── native-page 视图入口 ──
@@ -165,14 +240,8 @@ function viewHtml(view) {
   return contentHtml();
 }
 function explorerHtml() {
-  const vl = visibleList();
-  const rows = vl.items.map(d => `
-    <li class="np-item ${d.key === state.selectedKey ? 'sel' : ''}" data-key="${esc(d.key)}">
-      <span class="np-dot ${d.published ? 'pub' : 'draft'}"></span>
-      <span class="np-nm">${esc(d.name || d.key)}</span>
-      <span class="np-ver">v${d.version ?? 1}</span>
-      <button class="np-del" data-del="${esc(d.key)}" title="删除决策集">✕</button>
-    </li>`).join('');
+  const gl = groupedList();
+  const catOpts = (state.categories || []).map(c => `<option value="${esc(c.code)}">${esc(c.name || c.code)}</option>`).join('');
   const createForm = state.creating ? `
     <div class="np-create">
       <div class="np-seg-row">
@@ -181,26 +250,63 @@ function explorerHtml() {
       </div>
       <input class="np-in" id="nc-name" placeholder="决策集名称，如 授信审批" autocomplete="off">
       <input class="np-in" id="nc-key" placeholder="业务键（英数下划线，如 credit_line）" autocomplete="off">
+      <select class="np-in" id="nc-cat" title="分类"><option value="">未分类</option>${catOpts}</select>
       <div class="np-create-row">
         <button class="np-btn xs" data-act="create-ok">创建并编辑</button>
         <button class="np-btn xs ghost" data-act="create-cancel">取消</button>
       </div>
       <div class="np-create-hint">决策表=单张二维表+命中策略；决策图=多节点编排的 DAG。键跨版本不变、求值按它寻址；留空则由名称推导。</div>
     </div>` : '';
-  const empty = state.list.length ? '无匹配决策集' : '暂无决策集';
-  const pagerHtml = vl.total > PAGE_SIZE
-    ? `<button class="np-btn xs ghost" data-act="page-prev" ${vl.page <= 1 ? 'disabled' : ''}>‹</button><span class="np-pageinfo">${vl.page} / ${vl.pages}</span><button class="np-btn xs ghost" data-act="page-next" ${vl.page >= vl.pages ? 'disabled' : ''}>›</button>`
-    : '';
+  const mgr = state.managingCats ? catManagerHtml() : '';
+  const groupsHtml = gl.groups.length
+    ? gl.groups.map(g => {
+        const gid = g.code || '__none__';
+        const open = state.search ? true : !state.collapsed[gid]; // 搜索时强制展开；否则按折叠态（默认展开）
+        return `<details class="np-grp"${open ? ' open' : ''} data-grp="${esc(gid)}">
+          <summary class="np-grp-hd"><span class="np-grp-nm">${esc(g.name)}</span><span class="np-sub">${g.items.length}</span></summary>
+          <ul class="np-list-inner">${g.items.map(itemRow).join('')}</ul>
+        </details>`;
+      }).join('')
+    : `<div class="np-empty">${state.list.length ? '无匹配决策集' : '暂无决策集'}</div>`;
   return `<div class="np-root np-explorer">
-    <div class="np-hd">决策集<span class="np-sub">${vl.filteredTotal}${vl.filteredTotal !== state.list.length ? '/' + state.list.length : ''}</span>
-      <button class="np-btn xs" data-act="new">+ 新建</button></div>
+    <div class="np-hd">决策集<span class="np-sub">${gl.filteredTotal}${gl.filteredTotal !== state.list.length ? '/' + state.list.length : ''}</span>
+      <span class="np-hd-actions"><button class="np-btn xs" data-act="new">+ 新建</button><button class="np-iconbtn ${state.managingCats ? 'on' : ''}" data-act="cat-manage" title="管理分类">⚙</button></span></div>
     <div class="np-searchbar">
       <span class="np-searchwrap"><input class="np-in np-search" id="np-search" placeholder="查找名称或键…" value="${esc(state.search)}" autocomplete="off"/>${state.search ? '<button class="np-searchx" data-act="search-clear" title="清空">✕</button>' : ''}</span>
       <button class="np-iconbtn" data-act="reload" title="刷新">${ICON_REFRESH}</button>
     </div>
+    ${mgr}
     ${createForm}
-    <ul class="np-list">${rows || `<li class="np-empty">${empty}</li>`}</ul>
-    <div class="np-pager">${pagerHtml}</div>
+    <div class="np-groups">${groupsHtml}</div>
+  </div>`;
+}
+// 单个决策集行（分组内复用）。
+function itemRow(d) {
+  return `<li class="np-item ${d.key === state.selectedKey ? 'sel' : ''}" data-key="${esc(d.key)}">
+      <span class="np-dot ${d.published ? 'pub' : 'draft'}"></span>
+      <span class="np-nm">${esc(d.name || d.key)}</span>
+      <span class="np-ver">v${d.version ?? 1}</span>
+      <button class="np-del" data-del="${esc(d.key)}" title="删除决策集">✕</button>
+    </li>`;
+}
+// 分类管理面板（受管字典 CRUD：改名/上下移/删除/新增）。
+function catManagerHtml() {
+  const rows = (state.categories || []).map(c => `
+    <div class="np-catrow" data-cat="${esc(c.code)}">
+      <input class="np-in xs np-cat-name" data-cat-name="${esc(c.code)}" value="${esc(c.name || '')}" placeholder="分类名" title="回车/失焦保存名称"/>
+      <span class="np-cat-code" title="分类 code">${esc(c.code)}</span>
+      <button class="np-iconbtn xs" data-act="cat-up" data-code="${esc(c.code)}" title="上移">↑</button>
+      <button class="np-iconbtn xs" data-act="cat-down" data-code="${esc(c.code)}" title="下移">↓</button>
+      <button class="np-iconbtn xs danger" data-act="cat-del" data-code="${esc(c.code)}" title="删除分类">✕</button>
+    </div>`).join('') || '<div class="np-empty">暂无分类，下方新增</div>';
+  return `<div class="np-catmgr">
+    <div class="np-catmgr-hd">分类管理<button class="np-btn xs ghost" data-act="cat-manage">收起</button></div>
+    ${rows}
+    <div class="np-catadd">
+      <input class="np-in xs" id="cat-new-code" placeholder="code（英数下划线）" autocomplete="off"/>
+      <input class="np-in xs" id="cat-new-name" placeholder="名称" autocomplete="off"/>
+      <button class="np-btn xs" data-act="cat-add">+ 加分类</button>
+    </div>
   </div>`;
 }
 const ICON_REFRESH = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2v3h-3"/></svg>';
@@ -300,6 +406,8 @@ function graphSelectionHtml() {
 function propertyHtml() {
   if (!state.selectedKey) return `<div class="np-root"><div class="np-placeholder">未选择</div></div>`;
   const d = state.detail, a = state.analysis;
+  // 当前分类以列表元数据为准（草稿行的 categoryCode；published 定义 detail 走 release 不带分类）。
+  const curCat = (state.list.find(x => x.key === state.selectedKey) || {}).categoryCode || '';
   const isGraph = d && (d.kind === 'graph' || Array.isArray(d.nodes));
   const selHtml = isGraph ? graphSelectionHtml() : '';
   const analysisHtml = a ? `
@@ -315,6 +423,12 @@ function propertyHtml() {
     <div class="np-kv"><span>键</span><b>${esc(state.selectedKey)}</b></div>
     <div class="np-kv"><span>名称</span><b>${esc(d?.name || '')}</b></div>
     <div class="np-kv"><span>版本</span><b>v${d?.version ?? 1}</b></div>
+    <div class="np-kv np-kv-sel"><span>分类</span>
+      <select class="np-in xs" id="np-cat-sel" title="改变即保存">
+        <option value="" ${!curCat ? 'selected' : ''}>未分类</option>
+        ${(state.categories || []).map(c => `<option value="${esc(c.code)}" ${curCat === c.code ? 'selected' : ''}>${esc(c.name || c.code)}</option>`).join('')}
+      </select>
+    </div>
     <div class="np-hd">完整性分析<span class="np-sub">gap / overlap · 超越 ZEN</span></div>
     ${analysisHtml}
     <div class="np-actions">
@@ -392,7 +506,8 @@ function bind(root, view) {
     if (del) { ev.stopPropagation(); deleteDecision(del.getAttribute('data-del')); return; } // 删除按钮：先于行选中拦截
     const item = ev.target.closest('[data-key]');
     if (item) { selectDecision(item.getAttribute('data-key')); return; }
-    const act = ev.target.closest('[data-act]')?.getAttribute('data-act');
+    const actEl = ev.target.closest('[data-act]');
+    const act = actEl?.getAttribute('data-act');
     if (!act) return;
     if (act === 'reload') loadList();
     else if (act === 'new') { state.creating = true; refreshView('explorer'); focusCreate(root); }
@@ -403,7 +518,23 @@ function bind(root, view) {
     else if (act === 'page-prev') { if (state.page > 1) { state.page--; refreshView('explorer'); } }
     else if (act === 'page-next') { state.page++; refreshView('explorer'); }
     else if (act === 'search-clear') { state.search = ''; state.page = 1; refreshView('explorer'); focusSearch(root); }
+    // 分类管理
+    else if (act === 'cat-manage') { state.managingCats = !state.managingCats; refreshView('explorer'); }
+    else if (act === 'cat-add') catAdd(root);
+    else if (act === 'cat-up') catMove(actEl.getAttribute('data-code'), 'up');
+    else if (act === 'cat-down') catMove(actEl.getAttribute('data-code'), 'down');
+    else if (act === 'cat-del') catDelete(actEl.getAttribute('data-code'));
   }, { once: false });
+  // 分组折叠态记忆（toggle 不冒泡 → 捕获阶段在 root 接住；只记 state，不重渲）。
+  root.addEventListener('toggle', (ev) => {
+    const d = ev.target; if (!d.matches || !d.matches('details.np-grp')) return;
+    state.collapsed[d.getAttribute('data-grp')] = !d.open;
+  }, true);
+  // 分类选择/重命名（change=失焦/回车）。
+  root.addEventListener('change', (ev) => {
+    if (ev.target.id === 'np-cat-sel') { recategorize(ev.target.value); return; }
+    if (ev.target.classList && ev.target.classList.contains('np-cat-name')) { catRename(ev.target.getAttribute('data-cat-name'), ev.target.value.trim()); return; }
+  });
   // 查找输入：即时过滤。整页重渲后恢复输入焦点+光标（这样清空按钮✕能正确出现/消失）。
   root.addEventListener('input', (ev) => {
     if (ev.target.id !== 'np-search') return;
@@ -412,10 +543,11 @@ function bind(root, view) {
     refreshView('explorer');
     focusSearch(root, pos);
   });
-  // 新建输入框回车即创建
+  // 新建输入框回车即创建；分类新增输入回车即加分类。
   root.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter') return;
     if (ev.target.id === 'nc-name' || ev.target.id === 'nc-key') { ev.preventDefault(); createDecision(root); }
+    else if (ev.target.id === 'cat-new-code' || ev.target.id === 'cat-new-name') { ev.preventDefault(); catAdd(root); }
   });
 }
 // 恢复搜索框焦点 + 光标位置（整页重渲后）。
@@ -463,6 +595,28 @@ function styleCss() {
     font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:var(--dg-fg);height:100%;box-sizing:border-box;padding:10px 11px;overflow:auto}
   .np-root.np-explorer{display:flex;flex-direction:column;overflow:hidden}
   .np-root.np-explorer .np-list{flex:1 1 auto;overflow:auto;min-height:0;margin:0 -2px;padding:0 2px}
+  /* 分类分组折叠 */
+  .np-groups{flex:1 1 auto;overflow:auto;min-height:0;margin:0 -2px;padding:0 2px}
+  .np-list-inner{list-style:none;margin:0;padding:0}
+  .np-grp{border-bottom:1px solid var(--dg-border)}
+  .np-grp[open]>.np-grp-hd{color:var(--dg-fg)}
+  .np-grp-hd{list-style:none;cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px;padding:7px 6px;font-size:11.5px;font-weight:600;color:var(--dg-muted);letter-spacing:.02em}
+  .np-grp-hd::-webkit-details-marker{display:none}
+  .np-grp-hd::before{content:"▸";font-size:10px;color:var(--dg-faint);transition:transform .12s;flex:0 0 auto}
+  .np-grp[open]>.np-grp-hd::before{transform:rotate(90deg)}
+  .np-grp-nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .np-hd-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
+  .np-iconbtn.on{color:var(--dg-accent);background:var(--dg-accent-soft)}
+  /* 分类管理面板 */
+  .np-catmgr{border:1px solid var(--dg-border);border-radius:8px;padding:7px;margin:2px 0 8px;background:var(--dg-surface)}
+  .np-catmgr-hd{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--dg-muted);margin-bottom:6px}
+  .np-catrow{display:flex;align-items:center;gap:5px;margin-bottom:4px}
+  .np-cat-name{flex:1 1 auto;min-width:0}
+  .np-cat-code{flex:0 0 auto;max-width:34%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--dg-mono);font-size:10.5px;color:var(--dg-faint)}
+  .np-catadd{display:flex;align-items:center;gap:5px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--dg-border)}
+  .np-in.xs{height:26px;font-size:12px;padding:2px 7px}
+  .np-kv-sel{align-items:center}
+  .np-kv-sel select.np-in{flex:1 1 auto;min-width:0;margin-left:8px}
   .np-hd{font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--dg-muted);margin:12px 0 7px;display:flex;align-items:center;gap:8px;flex:0 0 auto}
   .np-hd::before{content:"";width:3px;height:12px;border-radius:2px;background:linear-gradient(var(--dg-accent),var(--dg-accent2));box-shadow:0 0 8px var(--dg-accent-line)}
   .np-hd:first-child{margin-top:2px}

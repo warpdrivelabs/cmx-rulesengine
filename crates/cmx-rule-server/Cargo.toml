@@ -18,7 +18,9 @@ cmx-rule-app = { workspace = true }
 cmx-web-chassis = { workspace = true }
 cmx-web-monitor = { workspace = true }
 cmx-database-pg = { workspace = true }
-cmx-service-base = { workspace = true, features = ["config-manager"] }
+# 基础服务库：pg 数据源注册原语 + 统一基础设施装配（init_infra/shutdown_infra，含 Nacos 注册/
+# 配置中心接入，开关默认全关，见 .env 的 Nacos 可选块）。
+cmx-service-base = { workspace = true, features = ["config-manager", "registry-config"] }
 
 axum = { workspace = true }
 tokio = { workspace = true }

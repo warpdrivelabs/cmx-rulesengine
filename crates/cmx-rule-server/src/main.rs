@@ -95,9 +95,13 @@ fn apply_toml_env() {
 #[tokio::main]
 async fn main() -> cmx_web_chassis::Result<()> {
     dotenvy::dotenv().ok();
-    if let Err(e) = cmx_service_base::init_config_manager() {
-        tracing::warn!(error = %e, "全局 ConfigManager 初始化失败，回退 env/默认兜底");
-    }
+    // 基础设施装配（与门户 run_platform 同一制度）：本地 toml ← Nacos 远程配置中心 ← env
+    // 三源 ConfigManager + 注册中心客户端（自注册 + 实例缓存 + 30s 服务列表同步）。开关默认
+    // 全关（未开 NACOS_ENABLED 时走 Mock，纯本地 toml+env，行为与接入前一致）；开启后
+    // create 阶段强依赖 Nacos 可达，失败即中止启动（register 阶段失败仅 warn）。
+    cmx_service_base::init_infra()
+        .await
+        .map_err(|e| cmx_web_chassis::ChassisError::Config(format!("基础设施初始化失败: {e}")))?;
 
     let mut cfg = ChassisConfig::load("rules", "RULE", "rules-server.toml");
     apply_toml_env();
@@ -170,7 +174,11 @@ async fn main() -> cmx_web_chassis::Result<()> {
             })
         });
 
-    run(spec).await
+    let result = run(spec).await;
+    // serve 结束（收到关闭信号或自然退出）：注销注册中心实例后再返回——不用 `?` 提前返回，
+    // 否则 Err 路径会跳过注销（实例要等 Nacos 心跳超时才摘除）。
+    cmx_service_base::shutdown_infra().await;
+    result
 }
 
 /// 构造 rule PG 数据源配置（url 从 env 来）。

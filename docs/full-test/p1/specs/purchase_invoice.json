@@ -27,7 +27,8 @@
     "netStock":   { "op": "sum", "over": "lines", "amount": "netAmount", "where": { "itemType": "STOCK" } },
     "netExpense": { "op": "sum", "over": "lines", "amount": "netAmount", "where": { "itemType": "EXPENSE" } },
     "tax":        { "op": "sum", "over": "lines", "amount": "taxAmount" },
-    "gross":      { "op": "add", "of": ["netStock", "netExpense", "tax"] }
+    "gross":      { "op": "add", "of": ["netStock", "netExpense", "tax"] },
+    "total":      { "op": "add", "of": ["gross"] }
   },
   "dims": { "costCenter": "header.costCenter" }
 }

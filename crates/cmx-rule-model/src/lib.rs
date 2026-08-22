@@ -17,7 +17,7 @@ pub mod ir;
 pub mod store;
 
 pub use analyze::{CoverageReport, Gap, Overlap};
-pub use def::{DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, ReleaseMeta, ScriptFunction, TestCase};
+pub use def::{DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, ReleaseMeta, RuleCategory, ScriptFunction, TestCase};
 pub use error::{Error, Result, StoreError, StoreResult};
 pub use eval::{EvalContext, EvalResult, TraceNode};
 pub use ir::{

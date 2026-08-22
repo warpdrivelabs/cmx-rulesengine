@@ -11,8 +11,8 @@ use cmx_core::model::cell::DataValue;
 use cmx_core::model::data::dataset::{DataSet, Row, Schema};
 use cmx_database_pg::{execute_sql, execute_sql_with_params, query_sql_with_params, SqlParams};
 use cmx_rule_model::{
-    DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, DecisionStore, ReleaseMeta, StoreError,
-    StoreResult, TestCase,
+    DecisionBody, DecisionDef, DecisionDefMeta, DecisionLog, DecisionStore, ReleaseMeta, RuleCategory,
+    StoreError, StoreResult, TestCase,
 };
 use serde_json::Value;
 
@@ -358,12 +358,13 @@ impl DecisionStore for PgDecisionStore {
             let schema = rel.schema.as_ref();
             let version = get_i64(row, schema, "version") as u32;
             let body = get_json(row, schema, "body")?;
-            return Ok(Some(def_from_parts(key, version, body)?));
+            // 发布快照不含分类（分类是设计期元数据、求值不依赖）→ None。
+            return Ok(Some(def_from_parts(key, version, None, body)?));
         }
 
         let dft = self
             .query(
-                "SELECT name, version, body FROM cmx_rule_definition WHERE key = $1",
+                "SELECT name, version, category_code, body FROM cmx_rule_definition WHERE key = $1",
                 vec![DataValue::String(key.to_string())],
                 "rule_definition",
             )
@@ -373,8 +374,9 @@ impl DecisionStore for PgDecisionStore {
         };
         let schema = dft.schema.as_ref();
         let version = get_i64(row, schema, "version") as u32;
+        let category_code = get_opt_string(row, schema, "category_code");
         let body = get_json(row, schema, "body")?;
-        Ok(Some(def_from_parts(key, version, body)?))
+        Ok(Some(def_from_parts(key, version, category_code, body)?))
     }
 
     async fn save_definition(&self, _tenant: &str, def: &DecisionDef) -> StoreResult<()> {
@@ -383,14 +385,15 @@ impl DecisionStore for PgDecisionStore {
             .map_err(|e| StoreError::Backend(format!("序列化决策体失败: {e}")))?;
         let now = Utc::now();
         self.exec(
-            "INSERT INTO cmx_rule_definition (key, name, version, published, body, created_at, updated_at) \
-             VALUES ($1, $2, $3, FALSE, $4, $5, $5) \
+            "INSERT INTO cmx_rule_definition (key, name, version, published, category_code, body, created_at, updated_at) \
+             VALUES ($1, $2, $3, FALSE, $4, $5, $6, $6) \
              ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, version = EXCLUDED.version, \
-             body = EXCLUDED.body, updated_at = EXCLUDED.updated_at",
+             category_code = EXCLUDED.category_code, body = EXCLUDED.body, updated_at = EXCLUDED.updated_at",
             vec![
                 DataValue::String(def.key.clone()),
                 DataValue::String(def.name.clone()),
                 DataValue::Int(def.version as i64),
+                opt_str(&def.category_code),
                 DataValue::Json(body.to_string()),
                 DataValue::DateTime(now),
             ],
@@ -402,7 +405,7 @@ impl DecisionStore for PgDecisionStore {
     async fn list_definitions(&self, _tenant: &str) -> StoreResult<Vec<DecisionDefMeta>> {
         let ds = self
             .query(
-                "SELECT key, name, version, published, updated_at FROM cmx_rule_definition \
+                "SELECT key, name, version, published, category_code, updated_at FROM cmx_rule_definition \
                  ORDER BY updated_at DESC",
                 vec![],
                 "rule_definition_list",
@@ -416,6 +419,7 @@ impl DecisionStore for PgDecisionStore {
                 name: get_opt_string(row, schema, "name").unwrap_or_default(),
                 version: get_i64(row, schema, "version") as u32,
                 published: get_bool(row, schema, "published"),
+                category_code: get_opt_string(row, schema, "category_code"),
                 updated_at: get_opt_ts(row, schema, "updated_at"),
             });
         }
@@ -443,18 +447,66 @@ impl DecisionStore for PgDecisionStore {
         .await?;
         Ok(())
     }
+
+    async fn list_categories(&self, _tenant: &str) -> StoreResult<Vec<RuleCategory>> {
+        let ds = self
+            .query(
+                "SELECT code, name, ord FROM cmx_rule_category ORDER BY ord ASC, code ASC",
+                vec![],
+                "rule_category_list",
+            )
+            .await?;
+        let schema = ds.schema.as_ref();
+        let mut out = Vec::with_capacity(ds.iter().count());
+        for row in ds.iter() {
+            out.push(RuleCategory {
+                code: get_string(row, schema, "code")?,
+                name: get_opt_string(row, schema, "name").unwrap_or_default(),
+                ord: get_i64(row, schema, "ord") as i32,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn save_category(&self, _tenant: &str, cat: &RuleCategory) -> StoreResult<()> {
+        let now = Utc::now();
+        self.exec(
+            "INSERT INTO cmx_rule_category (code, name, ord, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $4) \
+             ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, ord = EXCLUDED.ord, updated_at = EXCLUDED.updated_at",
+            vec![
+                DataValue::String(cat.code.clone()),
+                DataValue::String(cat.name.clone()),
+                DataValue::Int(cat.ord as i64),
+                DataValue::DateTime(now),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_category(&self, _tenant: &str, code: &str) -> StoreResult<()> {
+        // 只删分类字典行；引用它的决策集 category_code 不动 → 前端归「未分类」。
+        self.exec(
+            "DELETE FROM cmx_rule_category WHERE code = $1",
+            vec![DataValue::String(code.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 // ————————————————————————— 组装 / 取值助手 —————————————————————————
 
-/// 由列还原 [`DecisionDef`]：body 里含 kind 标签的决策体，拼回顶层 key/version。
-fn def_from_parts(key: &str, version: u32, body: Value) -> StoreResult<DecisionDef> {
+/// 由列还原 [`DecisionDef`]：body 里含 kind 标签的决策体，拼回顶层 key/version/分类。
+fn def_from_parts(key: &str, version: u32, category_code: Option<String>, body: Value) -> StoreResult<DecisionDef> {
     let body: DecisionBody = serde_json::from_value(body)
         .map_err(|e| StoreError::Backend(format!("反序列化决策体失败: {e}")))?;
     Ok(DecisionDef {
         key: key.to_string(),
         name: String::new(),
         version,
+        category_code,
         body,
     })
 }

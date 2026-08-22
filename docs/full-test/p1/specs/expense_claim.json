@@ -1,0 +1,29 @@
+{
+  "docType": "EXPENSE_CLAIM",
+  "bizEvent": "EXPENSE_REIMBURSE",
+  "top": {
+    "compUnit": "header.compUnit",
+    "postingDate": "header.claimDate",
+    "period": { "const": "2026-08" },
+    "currency": { "const": "CNY" }
+  },
+  "header": {
+    "docNo": "header.docNo",
+    "summary": "header.summary",
+    "employee": "header.employeeId"
+  },
+  "lines": {
+    "from": "details",
+    "map": {
+      "expenseType": "expenseType",
+      "amount": "amount",
+      "costCenter": "costCenter"
+    }
+  },
+  "amounts": {
+    "travel": { "op": "sum", "over": "lines", "amount": "amount", "where": { "expenseType": "TRAVEL" } },
+    "meal":   { "op": "sum", "over": "lines", "amount": "amount", "where": { "expenseType": "MEAL" } },
+    "total":  { "op": "add", "of": ["travel", "meal"] }
+  },
+  "dims": { "costCenter": "header.costCenter" }
+}

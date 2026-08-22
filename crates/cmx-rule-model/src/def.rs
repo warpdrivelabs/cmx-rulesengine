@@ -33,6 +33,9 @@ pub struct DecisionDef {
     /// 版本号（发布 +1；求值装载激活版本）。
     #[serde(default = "default_version")]
     pub version: u32,
+    /// 所属分类 code（受管分类字典 [`RuleCategory`] 的 code；None/空=未分类）。仅设计期组织用，求值不依赖。
+    #[serde(default, rename = "categoryCode", skip_serializing_if = "Option::is_none")]
+    pub category_code: Option<String>,
     /// 决策体（flatten 进顶层：`{key,name,version,kind,...}`）。
     #[serde(flatten)]
     pub body: DecisionBody,
@@ -65,8 +68,25 @@ pub struct DecisionDefMeta {
     /// 是否已发布（有不可变 release）。
     #[serde(default)]
     pub published: bool,
+    /// 所属分类 code（未分类=None）。前端按它分组展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// 受管分类字典项（决策集的「分类」；per-tenant DB，无 tenant 列）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleCategory {
+    /// 分类 code（稳定键，决策集 `category_code` 引用它）。
+    pub code: String,
+    /// 展示名。
+    #[serde(default)]
+    pub name: String,
+    /// 排序（升序；前端组顺序按它，未分类置底）。
+    #[serde(default)]
+    pub ord: i32,
 }
 
 /// 决策日志（每次求值一条，审计 + 可解释性下钻）—— 规则引擎的"历史态"。

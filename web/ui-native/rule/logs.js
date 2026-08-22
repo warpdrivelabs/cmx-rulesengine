@@ -13,7 +13,7 @@
 const CFG = { apiBase: '', fetchInit: { credentials: 'same-origin' }, authHeaders: () => ({}) };
 export function configure(o) { Object.assign(CFG, o || {}); return CFG; }
 
-const state = { list: [], selectedKey: null, logs: [], selectedLog: null, detail: null, search: '', page: 1, hosts: new Set() };
+const state = { list: [], categories: [], collapsed: {}, selectedKey: null, logs: [], selectedLog: null, detail: null, search: '', page: 1, hosts: new Set() };
 const PAGE_SIZE = 12;
 function visibleList() {
   const q = (state.search || '').trim().toLowerCase();
@@ -22,6 +22,23 @@ function visibleList() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(Math.max(1, state.page), pages);
   return { items: filtered.slice((page - 1) * PAGE_SIZE, (page - 1) * PAGE_SIZE + PAGE_SIZE), total, pages, page, filteredTotal: total };
+}
+// 过滤后按分类分桶（组顺序取分类字典 ord，未分类置底）——用于按分类分组折叠展示。
+function groupedList() {
+  const q = (state.search || '').trim().toLowerCase();
+  const filtered = q ? state.list.filter(d => (d.name || '').toLowerCase().includes(q) || (d.key || '').toLowerCase().includes(q)) : state.list;
+  const cats = state.categories || [];
+  const known = new Set(cats.map(c => c.code));
+  const buckets = new Map();
+  for (const d of filtered) {
+    const code = (d.categoryCode && known.has(d.categoryCode)) ? d.categoryCode : '';
+    if (!buckets.has(code)) buckets.set(code, []);
+    buckets.get(code).push(d);
+  }
+  const groups = [];
+  for (const c of cats) if (buckets.has(c.code)) groups.push({ code: c.code, name: c.name || c.code, items: buckets.get(c.code) });
+  if (buckets.has('')) groups.push({ code: '', name: '未分类', items: buckets.get('') });
+  return { groups, filteredTotal: filtered.length };
 }
 function focusSearch(pos) {
   requestAnimationFrame(() => { for (const h of state.hosts) { if (h.__view === 'explorer') { const inp = hostRoot(h)?.querySelector?.('#rl-search'); if (inp) { inp.focus(); const p = pos == null ? inp.value.length : pos; try { inp.setSelectionRange(p, p); } catch { /* */ } } } } });
@@ -35,7 +52,7 @@ async function apiJson(url, options = {}) {
   return j && typeof j === 'object' && 'data' in j ? j.data : j;
 }
 
-async function loadList() { try { state.list = await apiJson('/api/rules/v1/definitions') || []; } catch { state.list = []; } refreshView('explorer'); }
+async function loadList() { try { const [list, cats] = await Promise.all([apiJson('/api/rules/v1/definitions'), apiJson('/api/rules/v1/categories').catch(() => [])]); state.list = list || []; state.categories = cats || []; } catch { state.list = []; } refreshView('explorer'); }
 async function selectDecision(key) {
   state.selectedKey = key; state.logs = []; state.selectedLog = null; state.detail = null;
   refreshView('explorer'); refreshView('content'); refreshView('property');
@@ -59,20 +76,25 @@ function refreshView(view) { for (const host of state.hosts) { if (host.__view !
 function viewHtml(view) { if (view === 'explorer') return explorerHtml(); if (view === 'property') return propertyHtml(); return contentHtml(); }
 
 function explorerHtml() {
-  const vl = visibleList();
-  const rows = vl.items.map(d => `<li class="rl-item ${d.key === state.selectedKey ? 'sel' : ''}" data-key="${esc(d.key)}"><span class="rl-nm">${esc(d.name || d.key)}</span></li>`).join('');
-  const empty = state.list.length ? '无匹配决策集' : '暂无决策集';
-  const pagerHtml = vl.total > PAGE_SIZE
-    ? `<button class="rl-btn xs ghost" data-act="list-prev" ${vl.page <= 1 ? 'disabled' : ''}>‹</button><span class="rl-pageinfo">${vl.page} / ${vl.pages}</span><button class="rl-btn xs ghost" data-act="list-next" ${vl.page >= vl.pages ? 'disabled' : ''}>›</button>`
-    : '';
+  const gl = groupedList();
+  const groupsHtml = gl.groups.length
+    ? gl.groups.map(g => {
+        const gid = g.code || '__none__';
+        const open = state.search ? true : !state.collapsed[gid];
+        const rows = g.items.map(d => `<li class="rl-item ${d.key === state.selectedKey ? 'sel' : ''}" data-key="${esc(d.key)}"><span class="rl-nm">${esc(d.name || d.key)}</span></li>`).join('');
+        return `<details class="rl-grp"${open ? ' open' : ''} data-grp="${esc(gid)}">
+          <summary class="rl-grp-hd"><span class="rl-grp-nm">${esc(g.name)}</span><span class="rl-sub">${g.items.length}</span></summary>
+          <ul class="rl-list-inner">${rows}</ul>
+        </details>`;
+      }).join('')
+    : `<div class="ph">${state.list.length ? '无匹配决策集' : '暂无决策集'}</div>`;
   return `<div class="rl rl-explorer">
-    <div class="rl-hd">决策集<span class="rl-sub">${vl.filteredTotal}${vl.filteredTotal !== state.list.length ? '/' + state.list.length : ''}</span></div>
+    <div class="rl-hd">决策集<span class="rl-sub">${gl.filteredTotal}${gl.filteredTotal !== state.list.length ? '/' + state.list.length : ''}</span></div>
     <div class="rl-searchbar">
       <span class="rl-searchwrap"><input class="rl-search" id="rl-search" placeholder="查找名称或键…" value="${esc(state.search)}" autocomplete="off"/>${state.search ? '<button class="rl-searchx" data-act="list-search-clear" title="清空">✕</button>' : ''}</span>
       <button class="rl-iconbtn" data-act="list-reload" title="刷新">${ICON_REFRESH}</button>
     </div>
-    <ul class="rl-list">${rows || `<li class="ph">${empty}</li>`}</ul>
-    <div class="rl-pager">${pagerHtml}</div>
+    <div class="rl-groups">${groupsHtml}</div>
   </div>`;
 }
 const ICON_REFRESH = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2v3h-3"/></svg>';
@@ -116,6 +138,11 @@ function propertyHtml() {
 function bind(root, view) {
   if (root.__rulesLogsBound) return; // 委托监听只绑一次；refresh 仅重置 innerHTML 不动 root，重复绑会叠加→事件风暴
   root.__rulesLogsBound = true;
+  // 分组折叠态记忆（toggle 不冒泡 → 捕获阶段接住）。
+  root.addEventListener('toggle', (ev) => {
+    const d = ev.target; if (!d.matches || !d.matches('details.rl-grp')) return;
+    state.collapsed[d.getAttribute('data-grp')] = !d.open;
+  }, true);
   root.addEventListener('input', (ev) => {
     if (ev.target.id !== 'rl-search') return;
     const pos = ev.target.selectionStart;
@@ -162,6 +189,15 @@ function css() {
     font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:var(--dg-fg);height:100%;box-sizing:border-box;padding:10px 11px;overflow:auto}
   .rl.rl-explorer{display:flex;flex-direction:column;overflow:hidden}
   .rl.rl-explorer .rl-list{flex:1 1 auto;overflow:auto;min-height:0;margin:0 -2px;padding:0 2px}
+  .rl-groups{flex:1 1 auto;overflow:auto;min-height:0;margin:0 -2px;padding:0 2px}
+  .rl-list-inner{list-style:none;margin:0;padding:0}
+  .rl-grp{border-bottom:1px solid var(--dg-border)}
+  .rl-grp-hd{list-style:none;cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px;padding:7px 6px;font-size:11.5px;font-weight:600;color:var(--dg-muted);letter-spacing:.02em}
+  .rl-grp-hd::-webkit-details-marker{display:none}
+  .rl-grp-hd::before{content:"▸";font-size:10px;color:var(--dg-faint);transition:transform .12s;flex:0 0 auto}
+  .rl-grp[open]>.rl-grp-hd::before{transform:rotate(90deg)}
+  .rl-grp[open]>.rl-grp-hd{color:var(--dg-fg)}
+  .rl-grp-nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ph{color:var(--dg-faint);padding:22px 10px;text-align:center;font-size:12px}
   .rl-hd{font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--dg-muted);margin:12px 0 7px;display:flex;align-items:center;gap:8px;flex:0 0 auto}
   .rl-hd::before{content:"";width:3px;height:12px;border-radius:2px;background:linear-gradient(var(--dg-accent),var(--dg-accent2));box-shadow:0 0 8px var(--dg-accent-line);flex:0 0 auto}

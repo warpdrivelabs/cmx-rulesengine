@@ -10,7 +10,7 @@ use crate::tenant::{current_tenant, current_user};
 use axum::extract::Path;
 use axum::Json;
 use chrono::Utc;
-use cmx_rule_model::{DecisionBody, DecisionDef, DecisionLog, DecisionStore, EvalContext, TestCase};
+use cmx_rule_model::{DecisionBody, DecisionDef, DecisionLog, DecisionStore, EvalContext, RuleCategory, TestCase};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -48,6 +48,41 @@ pub async fn save_draft(Json(def): Json<DecisionDef>) -> Result<Json<ApiResp<Val
         .await
         .map_err(|e| RuleError::internal(format!("保存草稿失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "key": def.key, "saved": true }))))
+}
+
+// ————————————————————————— 分类字典（受管） —————————————————————————
+
+/// GET /categories —— 受管分类字典（按 ord 升序）。
+pub async fn list_categories() -> Result<Json<ApiResp<Value>>> {
+    let tenant = current_tenant();
+    let cats = store()
+        .list_categories(&tenant)
+        .await
+        .map_err(|e| RuleError::internal(format!("列出分类失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!(cats))))
+}
+
+/// POST /categories —— upsert 一个分类（按 code）。
+pub async fn save_category(Json(cat): Json<RuleCategory>) -> Result<Json<ApiResp<Value>>> {
+    if cat.code.trim().is_empty() {
+        return Err(RuleError::business("分类 code 不能为空".to_string()));
+    }
+    let tenant = current_tenant();
+    store()
+        .save_category(&tenant, &cat)
+        .await
+        .map_err(|e| RuleError::internal(format!("保存分类失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "code": cat.code, "saved": true }))))
+}
+
+/// DELETE /categories/{code} —— 删除分类（引用它的决策集自动归「未分类」）。
+pub async fn delete_category(Path(code): Path<String>) -> Result<Json<ApiResp<Value>>> {
+    let tenant = current_tenant();
+    store()
+        .delete_category(&tenant, &code)
+        .await
+        .map_err(|e| RuleError::internal(format!("删除分类失败: {e}")))?;
+    Ok(Json(ApiResp::ok(json!({ "code": code, "deleted": true }))))
 }
 
 /// POST /definitions/validate —— 结构 + 单元格 + 脚本语法校验（不落库）。

@@ -1,0 +1,34 @@
+{
+  "docType": "PURCHASE_INVOICE",
+  "bizEvent": "SUPPLIER_INVOICE",
+  "top": {
+    "compUnit": "header.compUnit",
+    "postingDate": "header.invoiceDate",
+    "period": { "const": "2026-08" },
+    "currency": { "path": "header.currency", "default": "CNY" }
+  },
+  "header": {
+    "docNo": "header.docNo",
+    "summary": "header.summary",
+    "supplierId": "header.supplierId"
+  },
+  "lines": {
+    "from": "lines",
+    "map": {
+      "itemType": "itemType",
+      "matGroup": "matGroup",
+      "taxCode": "taxCode",
+      "netAmount": "netAmount",
+      "taxAmount": "taxAmount",
+      "costCenter": "costCenter"
+    }
+  },
+  "amounts": {
+    "netStock":   { "op": "sum", "over": "lines", "amount": "netAmount", "where": { "itemType": "STOCK" } },
+    "netExpense": { "op": "sum", "over": "lines", "amount": "netAmount", "where": { "itemType": "EXPENSE" } },
+    "tax":        { "op": "sum", "over": "lines", "amount": "taxAmount" },
+    "gross":      { "op": "add", "of": ["netStock", "netExpense", "tax"] },
+    "total":      { "op": "add", "of": ["gross"] }
+  },
+  "dims": { "costCenter": "header.costCenter" }
+}

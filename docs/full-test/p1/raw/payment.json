@@ -1,0 +1,8 @@
+{
+  "header": { "docNo": "PY-20260822-031", "compUnit": "1000", "payDate": "2026-08-22",
+    "currency": "CNY", "supplierId": "V0001", "summary": "支付V0001货款", "payMethod": "BANK" },
+  "allocations": [
+    { "invoiceNo": "PI-20260722-088", "amount": 5000 },
+    { "invoiceNo": "PI-20260801-012", "amount": 8560 }
+  ]
+}

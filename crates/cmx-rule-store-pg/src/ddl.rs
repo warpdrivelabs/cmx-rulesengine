@@ -1,7 +1,7 @@
 //! 规则引擎 PG 表结构 DDL（幂等）。
 //!
 //! 硬约束（对齐 flow store-pg）：`cmx_rule_` 前缀；禁外键，用索引替代；DDL 幂等（IF NOT EXISTS）。
-//! 五表——无 RU 运行表（规则决策无长驻状态）：定义 / 发布 / 决策日志 / 测试用例 / 脚本函数库（SC3）。
+//! 六表——无 RU 运行表（规则决策无长驻状态）：定义 / 发布 / 决策日志 / 测试用例 / 脚本函数库（SC3）/ 分类字典。
 //! 多租户（R3）：per-tenant DB 隔离，故表内不带 tenant 列（库即租户边界）。
 
 /// 建表 DDL（幂等）。按顺序执行。
@@ -12,11 +12,23 @@ pub const DDL_STATEMENTS: &[&str] = &[
         name        VARCHAR(256) NOT NULL DEFAULT '',
         version     INTEGER      NOT NULL DEFAULT 1,
         published   BOOLEAN      NOT NULL DEFAULT FALSE,
+        category_code VARCHAR(128),
         body        JSONB        NOT NULL,
         created_at  TIMESTAMPTZ  NOT NULL,
         updated_at  TIMESTAMPTZ  NOT NULL
     )"#,
+    // 补列（老库平滑升级；本 workspace 首个 ADD COLUMN IF NOT EXISTS）。
+    "ALTER TABLE cmx_rule_definition ADD COLUMN IF NOT EXISTS category_code VARCHAR(128)",
     "CREATE INDEX IF NOT EXISTS idx_cmx_rule_definition_published ON cmx_rule_definition (published)",
+    "CREATE INDEX IF NOT EXISTS idx_cmx_rule_definition_category ON cmx_rule_definition (category_code)",
+    // —— 受管分类字典（决策集的「分类」；无外键，删分类不动引用它的决策集）——
+    r#"CREATE TABLE IF NOT EXISTS cmx_rule_category (
+        code        VARCHAR(128) PRIMARY KEY,
+        name        VARCHAR(256) NOT NULL DEFAULT '',
+        ord         INTEGER      NOT NULL DEFAULT 0,
+        created_at  TIMESTAMPTZ  NOT NULL,
+        updated_at  TIMESTAMPTZ  NOT NULL
+    )"#,
     // —— 不可变发布（key+version 唯一；rev = 内容哈希；body 为发布时快照）——
     r#"CREATE TABLE IF NOT EXISTS cmx_rule_release (
         id          VARCHAR(64)  PRIMARY KEY,

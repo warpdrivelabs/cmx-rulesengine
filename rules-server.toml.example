@@ -1,22 +1,32 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # cmx-rule-server 配置样例（独立规则引擎微服务）。复制为 rules-server.toml 使用。
 #
-# 框架级字段（host/port/log）由 cmx-web-chassis 解析（RULE_ 前缀环境变量亦可覆盖）。
-# [auth]/[datasource] 两段由 main.rs::apply_toml_env 读出 → 注入 RULE_* 环境变量（env 优先）。
+# 加载顺序：本文件（路径由 CONFIG_FILE 指定，或默认 ./rules-server.toml）→ 环境变量覆盖。
+# chassis 框架级走 [server] 段（SERVER__* 环境变量亦可覆盖，与 ConfigManager `__` 约定同名）；业务段经 ConfigManager 直读。
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 监听地址与端口（避开平台 8080 / flow 8091 / report 8092 / flow-demo 8090,8093）。
+# —— chassis 框架级（[server] 段，全平台统一形态）——
+# 监听地址与端口（避开平台 8080 / flow 8091 / report 8092 / model 8093 / mdm 8095）。
+[server]
 host = "0.0.0.0"
 port = 8094
-
-# 日志（chassis：控制台 CompactFormatter + 滚动文件 JSON）。
-log_dir = "./logs"
+log_dir = "logs"
 log_level = "info"
+graceful_timeout_secs = 10
 
-[auth]
+# —— 数据源（标准 [[databases]] 段；BaseConfig 直读，db_id = 引擎常量 RULE_DB_ID）——
+# 规则引擎运行库（决策定义/发布/决策日志/测试用例）。R0 复用 flow 的 fico 库（cmx_rule_* 前缀不冲突）。
+[[databases]]
+db_id = "rule_pg"
+db_name = "规则引擎库"
+db_type = "postgres"
+db_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"
+default = true
+
+# —— 认证（[auth] 段，ConfigManager 直读；HS256-only，无 RS256 键）——
 # off = 不认证（默认，建 default 租户 scope 放行，单租户零回归）；jwt = 验签。
+[auth]
 mode = "off"
-# jwt_alg = "HS256"
 # jwt_secret = "shared-with-platform-change-me"
 # jwt_tenant_claim = "tenant"
 # jwt_roles_claim = "roles"
@@ -24,6 +34,7 @@ mode = "off"
 # api_keys = "cmx_sk_platform_to_rules:default"
 # tenancy = "single"   # single（默认，单库）| multi（per-tenant DB，R3）
 
-[datasource]
-# 规则引擎运行库（决策定义/发布/决策日志/测试用例）。R0 复用 flow 的 fico 库（cmx_rule_* 前缀不冲突）。
-rule_pg_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"
+# —— 页面资产（[assets] 段：引擎自持 native/html 页面投递目录；env 覆盖 ASSETS__UI_NATIVE_DIR/ASSETS__UI_HTML_DIR）——
+[assets]
+ui_native_dir = "web/ui-native"
+ui_html_dir   = "web/ui-html"

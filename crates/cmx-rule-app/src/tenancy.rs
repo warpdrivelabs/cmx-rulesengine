@@ -1,9 +1,11 @@
 //! 多租户：db-per-tenant 物理隔离（R3，镜像 flow S2）。
 //!
-//! 模式由 `RULE_TENANCY` 决定：`single`（默认，单库，零回归）| `multi`（每租户一库）。
+//! 模式由配置 `auth.tenancy` 决定（toml `[auth]` 段 ← env `AUTH__TENANCY` 覆盖）：
+//! `single`（默认，单库，零回归）| `multi`（每租户一库）。
 //! multi 下按 [`current_tenant`](crate::tenant::current_tenant) 派生 db_id `rule_<tenant>`（小写——
-//! 避 flow S6 记录的租户名大小写敏感坑），并在该租户首次访问时**懒注册**数据源（URL 由
-//! `RULE_TENANT_DB_URL_TEMPLATE` 的 `{tenant}` 占位派生）+ 建表；single 下恒用 [`RULE_DB_ID`]。
+//! 避 flow S6 记录的租户名大小写敏感坑），并在该租户首次访问时**懒注册**数据源（URL 由 env
+//! `RULE_TENANT_DB_URL_TEMPLATE` 的 `{tenant}` 占位派生，R3 未实现、保持 env-only）+ 建表；
+//! single 下恒用 [`RULE_DB_ID`]。
 //!
 //! 规则引擎无长驻运行态，故 R3 比 flow S2 更简单：只需「按租户选 db_id + 懒备库」，无 per-tenant
 //! 引擎实例缓存。
@@ -15,9 +17,13 @@ use std::sync::{Mutex, OnceLock};
 /// 默认租户库 db_id（single 模式 / 无租户 scope）。
 pub const RULE_DB_ID: &str = "rule_pg";
 
-/// 租户模式（`RULE_TENANCY`，默认 single）。
+/// 租户模式（配置 `auth.tenancy`，ConfigManager 直读；默认 single）。
 fn mode() -> String {
-    std::env::var("RULE_TENANCY").unwrap_or_else(|_| "single".to_string())
+    cmx_utils::ConfigManager::try_global()
+        .and_then(|cm| cm.get_string("auth.tenancy").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "single".to_string())
 }
 
 /// 是否多租户模式。

@@ -765,6 +765,7 @@ dependencies = [
  "cmx-rule-model",
  "cmx-rule-store-pg",
  "cmx-service-base",
+ "cmx-utils",
  "cmx-web-monitor",
  "jsonwebtoken",
  "serde",

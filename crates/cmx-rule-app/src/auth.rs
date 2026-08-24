@@ -1,8 +1,9 @@
 //! 认证中间件（R0 最小：off / jwt / api-key），建租户 scope。
 //!
-//! - `RULE_AUTH_MODE=off`（默认）：不校验，建 `default` 租户 scope 放行 —— 单租户零回归。
-//! - `RULE_AUTH_MODE=jwt`：验 Bearer JWT（HS256），解 tenant/user/roles claim；缺/坏 → 401。
-//! - API Key（`RULE_API_KEYS=key:tenant,...`）：`X-API-Key` 命中 → 服务身份，租户取 key 绑定。
+//! 配置 ConfigManager 直读（rules-server.toml `[auth]` 段 ← env `AUTH__*` 覆盖），每请求热读：
+//! - `auth.mode = "off"`（默认）：不校验，建 `default` 租户 scope 放行 —— 单租户零回归。
+//! - `auth.mode = "jwt"`：验 Bearer JWT（HS256），解 tenant/user/roles claim；缺/坏 → 401。
+//! - API Key（`auth.api_keys = "key:tenant,..."`）：`X-API-Key` 命中 → 服务身份，租户取 key 绑定。
 //!
 //! R3 将扩展 per-tenant DB 派生 + 委托用户令牌桥（对齐 flow S6）。本 R0 版把接缝留全，只做最小校验。
 
@@ -13,7 +14,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-/// 认证配置（懒读环境变量，对齐 flow auth.rs 的 env 驱动）。
+/// 认证配置（ConfigManager 直读 `[auth]` 段，每请求热读；未初始化时回退默认 = off 模式）。
 struct AuthConfig {
     mode: String,
     jwt_secret: String,
@@ -23,9 +24,15 @@ struct AuthConfig {
 }
 
 impl AuthConfig {
-    fn from_env() -> Self {
-        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
-        let api_keys = env("RULE_API_KEYS", "")
+    fn load() -> Self {
+        let get = |key: &str, default: &str| {
+            cmx_utils::ConfigManager::try_global()
+                .and_then(|cm| cm.get_string(key).ok())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| default.to_string())
+        };
+        let api_keys = get("auth.api_keys", "")
             .split(',')
             .filter(|s| !s.trim().is_empty())
             .filter_map(|pair| {
@@ -34,10 +41,10 @@ impl AuthConfig {
             })
             .collect();
         Self {
-            mode: env("RULE_AUTH_MODE", "off"),
-            jwt_secret: env("RULE_JWT_SECRET", "change-me"),
-            tenant_claim: env("RULE_JWT_TENANT_CLAIM", "tenant"),
-            roles_claim: env("RULE_JWT_ROLES_CLAIM", "roles"),
+            mode: get("auth.mode", "off"),
+            jwt_secret: get("auth.jwt_secret", "change-me"),
+            tenant_claim: get("auth.jwt_tenant_claim", "tenant"),
+            roles_claim: get("auth.jwt_roles_claim", "roles"),
             api_keys,
         }
     }
@@ -54,7 +61,7 @@ struct Claims {
 
 /// 认证中间件。建租户 scope + 确保租户库就绪后放行；失败返 401。
 pub async fn auth(req: Request, next: Next) -> Response {
-    let cfg = AuthConfig::from_env();
+    let cfg = AuthConfig::load();
 
     // off：默认租户放行（单租户零回归）。
     if cfg.mode == "off" {

@@ -185,7 +185,7 @@ export default { defaultView:'content', views:{
 
 ### 3.1 微服务自投递（cmx-rulesengine，B9）
 
-- 新建 `cmx-rulesengine/crates/cmx-rule-app/src/native_pages.rs`（照抄 `cmx-report/crates/cmx-rpt-app/src/native_pages.rs` 或 flow `frontend_pages.rs`）：读 `RULE_UI_DIR`（默认 `web/ui-native`）的 `index.json` + 源文件，`/native-pages`、`/native-pages/{id}`、`/native-pages/batch`，信封用本仓 `crate::resp::{ApiResp,RuleError}`，rev=xxhash64。
+- 新建 `cmx-rulesengine/crates/cmx-rule-app/src/native_pages.rs`（照抄 `cmx-report/crates/cmx-rpt-app/src/native_pages.rs` 或 flow `frontend_pages.rs`）：读 `[assets].ui_native_dir`（默认 `web/ui-native`；env 覆盖 `ASSETS__UI_NATIVE_DIR`）的 `index.json` + 源文件，`/native-pages`、`/native-pages/{id}`、`/native-pages/batch`，信封用本仓 `crate::resp::{ApiResp,RuleError}`，rev=xxhash64。
 - `cmx-rule-app/src/lib.rs` 加 `pub mod native_pages;`。
 - `cmx-rule-server/src/main.rs` 的 `api_router` 上 `.merge(cmx_rule_app::native_pages::frontend_pages_routes::<()>())`（免认证，与 swagger 同层）。
 

@@ -7,16 +7,16 @@
  * 与 flow-server 的唯一实质差异：**无定时器 poller**（规则决策无长驻实例/定时器），钩子②只建表
  * 预热存储，不起后台线程——纯请求驱动的无状态求值。
  *
- * 配置（chassis 框架级用 RULE_ 前缀；rule 专属用各自变量）：
- *   RULE_HOST / RULE_PORT（默认 0.0.0.0:8094）/ RULE_LOG_DIR / RULE_LOG_LEVEL / RULE_CONFIG(toml)
- *   RULE_PG_URL（数据源）/ RULE_AUTH_MODE / RULE_JWT_* / RULE_API_KEYS
+ * 配置（rules-server.toml，路径由 CONFIG_FILE 指定；[server] 框架键 env 覆盖 SERVER__*，与 ConfigManager `__` 约定同名）：
+ *   [server] host/port/log_dir/log_level/graceful_timeout_secs（默认 0.0.0.0:8094）
+ *   [[databases]] 标准数据源段（db_id = RULE_DB_ID = "rule_pg"，default=true；缺段启动失败）
+ *   [auth] 段 → cmx-rule-app 认证中间件 ConfigManager 直读（env 覆盖 AUTH__*）
  *
  * 用法：
- *   RULE_PG_URL=postgres://postgres:postgres@127.0.0.1:5432/fico cargo run -p cmx-rule-server
+ *   cargo run -p cmx-rule-server   # 读 cwd 的 rules-server.toml（或 CONFIG_FILE 指定）
  *   curl -XPOST http://127.0.0.1:8094/api/rules/v1/evaluate -d '{...}'
  */
 
-use cmx_database_pg::{DbConfig, DbType};
 use cmx_rule_app::openapi::openapi_json;
 use cmx_rule_app::{rule_openapi, rule_routes, rule_routes_v1, warm_store, RULE_DB_ID};
 use cmx_web_chassis::{run, BannerSpec, ChassisConfig, ServiceSpec};
@@ -31,67 +31,6 @@ const RULE_ART: &str = r#"
 ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝╚══════╝
 "#;
 
-/// rules-server.toml 的 [auth]/[datasource] 段（全可选）。
-#[derive(serde::Deserialize, Default)]
-struct FileConfig {
-    #[serde(default)]
-    auth: AuthSection,
-    #[serde(default)]
-    datasource: DatasourceSection,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct AuthSection {
-    mode: Option<String>,
-    jwt_alg: Option<String>,
-    jwt_secret: Option<String>,
-    jwt_tenant_claim: Option<String>,
-    jwt_roles_claim: Option<String>,
-    api_keys: Option<String>,
-    tenancy: Option<String>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct DatasourceSection {
-    rule_pg_url: Option<String>,
-}
-
-/// 读 toml 的 [auth]/[datasource] 段 → 注入 RULE_* 环境变量（env 未设时；env 优先）。
-fn apply_toml_env() {
-    let path = std::env::var("CONFIG_FILE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("RULE_CONFIG").ok().filter(|s| !s.trim().is_empty()))
-        .unwrap_or_else(|| "rules-server.toml".to_string());
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let file: FileConfig = match toml::from_str(&text) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::warn!(path = %path, error = %e, "rules-server.toml 解析失败，回退环境变量");
-            return;
-        }
-    };
-    let set_if_absent = |key: &str, val: &Option<String>| {
-        if let Some(v) = val
-            && !v.trim().is_empty()
-            && std::env::var(key).is_err()
-        {
-            // SAFETY: 启动早期、单线程、任何请求前设置进程环境变量。
-            unsafe { std::env::set_var(key, v) }
-        }
-    };
-    set_if_absent("RULE_AUTH_MODE", &file.auth.mode);
-    set_if_absent("RULE_JWT_ALG", &file.auth.jwt_alg);
-    set_if_absent("RULE_JWT_SECRET", &file.auth.jwt_secret);
-    set_if_absent("RULE_JWT_TENANT_CLAIM", &file.auth.jwt_tenant_claim);
-    set_if_absent("RULE_JWT_ROLES_CLAIM", &file.auth.jwt_roles_claim);
-    set_if_absent("RULE_API_KEYS", &file.auth.api_keys);
-    set_if_absent("RULE_TENANCY", &file.auth.tenancy);
-    set_if_absent("RULE_PG_URL", &file.datasource.rule_pg_url);
-}
-
 #[tokio::main]
 async fn main() -> cmx_web_chassis::Result<()> {
     dotenvy::dotenv().ok();
@@ -103,9 +42,8 @@ async fn main() -> cmx_web_chassis::Result<()> {
         .await
         .map_err(|e| cmx_web_chassis::ChassisError::Config(format!("基础设施初始化失败: {e}")))?;
 
-    let mut cfg = ChassisConfig::load("rules", "RULE", "rules-server.toml");
-    apply_toml_env();
-    if std::env::var("RULE_PORT").is_err() && cfg.port == 8080 {
+    let mut cfg = ChassisConfig::load("rules", "rules-server.toml");
+    if std::env::var("SERVER__PORT").is_err() && cfg.port == 8080 {
         cfg.port = 8094; // rule 默认端口（避开平台 8080 / flow 8091 / report 8092）。
     }
 
@@ -151,16 +89,28 @@ async fn main() -> cmx_web_chassis::Result<()> {
         .nest_api(false) // 已自行 nest /api，让根大盘 / 逃出 /api。
         .router(app_router)
         .state(())
-        // 钩子① 注册数据源（db_id 对齐 RULE_DB_ID）。
+        // 钩子① 注册数据源——平台封装：BaseConfig（标准 [[databases]] 段，ConfigManager 三源
+        // 合并）+ 共享注册原语 register_pg_datasources。要求 db_id = RULE_DB_ID（store 按该
+        // db_id 寻址）；缺段 / 缺 db_id 启动失败（无内置 URL 兜底）。
         .init("datasources", |_meta| {
             Box::pin(async {
-                let url = std::env::var("RULE_PG_URL").unwrap_or_else(|_| {
-                    "postgres://postgres:postgres@127.0.0.1:5432/fico".to_string()
-                });
-                cmx_service_base::register_pg_datasources(&[rule_db_config(RULE_DB_ID, &url)])
+                let base = cmx_service_base::BaseConfig::from_config_manager()
+                    .map_err(|e| anyhow::anyhow!("读取 [[databases]] 配置失败: {e}"))?;
+                if base.databases.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "rules-server.toml 未配置 [[databases]]（需 db_id=\"{RULE_DB_ID}\" 且 default=true 的库）"
+                    ));
+                }
+                if !base.databases.iter().any(|d| d.db_id == RULE_DB_ID) {
+                    return Err(anyhow::anyhow!(
+                        "[[databases]] 缺少 db_id=\"{RULE_DB_ID}\"（决策 store 按该 db_id 寻址）"
+                    ));
+                }
+                let ids: Vec<&str> = base.databases.iter().map(|d| d.db_id.as_str()).collect();
+                cmx_service_base::register_pg_datasources(&base.databases)
                     .await
                     .map_err(|e| anyhow::anyhow!("注册数据源失败: {e}"))?;
-                tracing::info!(db = RULE_DB_ID, "✅ 数据源已注册");
+                tracing::info!(databases = ?ids, "✅ 决策引擎 tokio-pg 数据源已注册（[[databases]] 配置驱动）");
                 Ok(())
             })
         })
@@ -179,23 +129,4 @@ async fn main() -> cmx_web_chassis::Result<()> {
     // 否则 Err 路径会跳过注销（实例要等 Nacos 心跳超时才摘除）。
     cmx_service_base::shutdown_infra().await;
     result
-}
-
-/// 构造 rule PG 数据源配置（url 从 env 来）。
-fn rule_db_config(db_id: &str, url: &str) -> DbConfig {
-    DbConfig {
-        db_type: DbType::Postgres,
-        db_url: url.to_string(),
-        db_id: db_id.to_string(),
-        db_name: None,
-        db_schema: Some("public".to_string()),
-        default: true,
-        pool_config: Default::default(),
-        health_check_interval: 60,
-        health_check_timeout: 5,
-        domain_code: None,
-        application_code: None,
-        module_code: None,
-        source_type: Some("default".to_string()),
-    }
 }

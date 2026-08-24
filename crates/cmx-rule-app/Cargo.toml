@@ -22,6 +22,8 @@ cmx-core = { workspace = true }
 cmx-web-monitor = { workspace = true }
 # 基础服务库：多租户懒注册 pg 数据源原语（default-features=false 不拉 Redis/sqlx）
 cmx-service-base = { workspace = true, default-features = false }
+# 配置中台（ConfigManager）：页面资产目录 assets_ui_* / [auth] 段直读（toml ← env 合并）
+cmx-utils = { workspace = true }
 
 axum = { workspace = true }
 serde = { workspace = true }

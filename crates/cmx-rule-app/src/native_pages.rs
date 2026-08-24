@@ -11,7 +11,9 @@
 //!   - `GET  /native-pages`       → ApiResp<{items,total,page,pageSize}> 分页列表（不含源码）
 //!
 //! rev = xxhash64(source_bytes, 0) → 16-hex（字节对齐门户 cmx-jsonstore::content_rev）。
-//! 页面目录由 env `RULE_UI_DIR` 指定，默认 `web/ui-native`（相对 rules-server cwd，即 cmx-rulesengine/）。
+//! 页面目录走统一 [assets] 段（ConfigManager，toml ← env 合并）：`assets.ui_native_dir`，
+//! 默认 `web/ui-native`（相对 rules-server cwd，即 cmx-rulesengine/）；env 直读兜底
+//! `ASSETS__UI_NATIVE_DIR`。
 //!
 //! 规则引擎只有 native 页（无业务单据 html 表单），故本模块**只投递 native**（对齐 flow/report 的
 //! native 分支，省去 html-pages）。
@@ -58,10 +60,28 @@ struct IndexFile {
     pages: Vec<IndexEntry>,
 }
 
-/// UI 目录（env `RULE_UI_DIR`，默认 `web/ui-native`）。
+/// 解析页面资产目录（统一 [assets] 段）：ConfigManager（toml ← env 合并）→ env 直读兜底 → 默认。
+fn assets_dir(cfg_key: &str, env_key: &str, default: &str) -> PathBuf {
+    if let Some(cm) = cmx_utils::ConfigManager::try_global()
+        && let Ok(v) = cm.get_string(cfg_key)
+    {
+        let v = v.trim();
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(v) = std::env::var(env_key) {
+        let v = v.trim();
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    PathBuf::from(default)
+}
+
+/// UI 目录（`assets.ui_native_dir`，默认 `web/ui-native`）。
 fn ui_dir() -> PathBuf {
-    let d = std::env::var("RULE_UI_DIR").unwrap_or_else(|_| "web/ui-native".to_string());
-    PathBuf::from(d)
+    assets_dir("assets.ui_native_dir", "ASSETS__UI_NATIVE_DIR", "web/ui-native")
 }
 
 /// 读页面索引（`<ui_dir>/index.json`）。失败 → 空集（降级，绝不 500 整个服务）。

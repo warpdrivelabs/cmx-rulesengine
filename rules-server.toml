@@ -1,0 +1,30 @@
+# cmx-rule-server 实际配置（独立决策引擎微服务模式，形态与 report-server.toml 对齐）。
+#
+# 加载顺序：本文件（路径由 CONFIG_FILE 指定，或默认 ./rules-server.toml）→ 环境变量覆盖。
+# chassis 框架级走 [server] 段（SERVER__* 环境变量亦可覆盖，与 ConfigManager `__` 约定同名）；业务段经 ConfigManager 直读。
+
+# —— chassis 框架级（[server] 段，全平台统一形态）——
+[server]
+host = "0.0.0.0"
+port = 8094
+log_dir = "logs"
+log_level = "info"
+graceful_timeout_secs = 10
+
+# —— 数据源（标准 [[databases]] 段；BaseConfig 直读，db_id = 引擎常量 RULE_DB_ID = "rule_pg"）——
+# 规则引擎运行库（决策定义/发布/决策日志/测试用例）。R0 复用 flow 的 fico 库（cmx_rule_* 前缀不冲突）。
+[[databases]]
+db_id = "rule_pg"
+db_name = "规则引擎库"
+db_type = "postgres"
+db_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"
+default = true
+
+# —— 认证（[auth] 段，ConfigManager 直读；off = 不认证，单租户零回归）——
+[auth]
+mode = "off"
+
+# —— 页面资产（[assets] 段：引擎自持 native/html 页面投递目录；env 覆盖 ASSETS__UI_NATIVE_DIR/ASSETS__UI_HTML_DIR）——
+[assets]
+ui_native_dir = "web/ui-native"
+ui_html_dir   = "web/ui-html"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
 # cmx-rulesengine 脚本能力（SC0-SC4）全面后端测试套件
-# 直连 rules-server :8094（RULE_AUTH_MODE=off，单租户 default）。
+# 直连 rules-server :8094（auth.mode=off，单租户 default）。
 # 覆盖：Rhai 接缝 / 四载体（Script 节点·脚本单元格·函数库·脚本决策）/ 沙箱 /
 #       语法校验 / 完整性分析黑盒 / trace 可解释性 / 数值 f64 归一 / 错误归因。
 # 所有落库数据以 qsc_ 前缀（脚本决策/图）与 qfn_ 前缀（函数）保留，末尾清理临时项。

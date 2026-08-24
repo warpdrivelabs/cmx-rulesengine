@@ -129,10 +129,10 @@ curl -XPOST $B/api/rules/v1/feel/validate -d '{"test":"[bad..10]"}'             
 
 ## 认证与多租户
 
-- `RULE_AUTH_MODE=off`（默认）：建 `default` 租户 scope 放行——单租户零回归。
-- `RULE_AUTH_MODE=jwt`：验 Bearer JWT（HS256），解 tenant/user/roles claim。
-- API Key（`RULE_API_KEYS=key:tenant`）：`X-API-Key` 命中 → 服务身份。
-- 配置见 [`rules-server.toml.example`](rules-server.toml.example) 的 `[auth]` / `[datasource]` 段（或 `RULE_*` 环境变量，env 优先）。
+- `auth.mode=off`（默认）：建 `default` 租户 scope 放行——单租户零回归。
+- `auth.mode=jwt`：验 Bearer JWT（HS256），解 tenant/user/roles claim。
+- API Key（`auth.api_keys=key:tenant`）：`X-API-Key` 命中 → 服务身份。
+- 配置见 [`rules-server.toml.example`](rules-server.toml.example)：`[server]` 框架段 + `[[databases]]` 数据源 + `[auth]` 认证（ConfigManager 直读，env 覆盖 `SERVER__*` / `AUTH__*` 族）。
 
 > per-tenant DB 物理隔离 + 委托用户令牌桥（对齐 flow S6）R3 落地。
 

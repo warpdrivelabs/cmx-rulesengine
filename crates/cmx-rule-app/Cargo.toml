@@ -24,6 +24,8 @@ cmx-web-monitor = { workspace = true }
 cmx-service-base = { workspace = true, default-features = false }
 # 配置中台（ConfigManager）：页面资产目录 assets_ui_* / [auth] 段直读（toml ← env 合并）
 cmx-utils = { workspace = true }
+# 页面只读投递（native-pages 三端点通用路由，替代原 native_pages.rs；错误体经 RuleError 渲染）
+cmx-form = { workspace = true }
 
 axum = { workspace = true }
 serde = { workspace = true }
@@ -35,5 +37,5 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 jsonwebtoken = { workspace = true }
 utoipa = { workspace = true }
-# native-pages 投递：rev = xxhash64(source)→16hex，字节对齐门户 cmx-jsonstore::content_rev
-xxhash-rust = { workspace = true }
+# [unused] native-pages 投递已收编至 cmx-form::serve（rev 计算在 cmx-form 内）
+# xxhash-rust = { workspace = true }

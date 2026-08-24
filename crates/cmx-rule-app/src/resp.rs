@@ -89,5 +89,16 @@ impl IntoResponse for RuleError {
     }
 }
 
+/// 页面投递内部错误 → 自持信封（保持历史错误体字节：BadRequest→business code=1，
+/// NotFound→404 code=4，与原 native_pages.rs 语义一致）。
+impl From<cmx_form::serve::PageServeError> for RuleError {
+    fn from(e: cmx_form::serve::PageServeError) -> Self {
+        match e {
+            cmx_form::serve::PageServeError::BadRequest(m) => Self::business(m),
+            cmx_form::serve::PageServeError::NotFound(m) => Self::not_found(m),
+        }
+    }
+}
+
 /// handler 结果别名。
 pub type Result<T> = core::result::Result<T, RuleError>;

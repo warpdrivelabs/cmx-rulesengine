@@ -11,7 +11,6 @@ pub mod auth;
 pub mod dashboard;
 pub mod engine;
 pub mod handlers;
-pub mod native_pages;
 pub mod openapi;
 pub mod resp;
 pub mod stats;

@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 cmx-rule-app = { workspace = true }
 cmx-web-chassis = { workspace = true }
+# 页面只读投递（native-pages 通用路由装配）
+cmx-form = { workspace = true }
 cmx-web-monitor = { workspace = true }
 cmx-database-pg = { workspace = true }
 # 基础服务库：pg 数据源注册原语 + 统一基础设施装配（init_infra/shutdown_infra，含 Nacos 注册/

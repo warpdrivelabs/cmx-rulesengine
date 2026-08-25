@@ -74,7 +74,7 @@ async function loadList() {
     ]);
     state.list = list || []; state.categories = cats || [];
   }
-  catch (e) { state.list = []; console.warn('装载决策集失败', e); }
+  catch (e) { state.list = []; console.warn('装载决策集失败', e); flash('装载决策集失败: ' + e.message, true); }
   refreshView('explorer');
 }
 async function selectDecision(key) {
@@ -87,7 +87,7 @@ async function selectDecision(key) {
     analysis = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(key) + '/analyze', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
-  } catch (e) { console.warn('装载定义/分析失败', e); }
+  } catch (e) { console.warn('装载定义/分析失败', e); flash('装载定义/分析失败: ' + e.message, true); }
   if (state.loadingKey !== key) return; // 选择已切换，丢弃过期结果（避免旧响应覆盖新选择）
   state.detail = detail; state.analysis = analysis; state.loadingKey = null;
   refreshView('content'); refreshView('property');

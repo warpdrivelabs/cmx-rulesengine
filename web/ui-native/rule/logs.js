@@ -52,17 +52,28 @@ async function apiJson(url, options = {}) {
   return j && typeof j === 'object' && 'data' in j ? j.data : j;
 }
 
-async function loadList() { try { const [list, cats] = await Promise.all([apiJson('/api/rules/v1/definitions'), apiJson('/api/rules/v1/categories').catch(() => [])]); state.list = list || []; state.categories = cats || []; } catch { state.list = []; } refreshView('explorer'); }
+async function loadList() { try { const [list, cats] = await Promise.all([apiJson('/api/rules/v1/definitions'), apiJson('/api/rules/v1/categories').catch(() => [])]); state.list = list || []; state.categories = cats || []; } catch (e) { state.list = []; console.warn('装载决策集失败', e); flash('装载决策集失败: ' + (e.message || e), true); } refreshView('explorer'); }
 async function selectDecision(key) {
   state.selectedKey = key; state.logs = []; state.selectedLog = null; state.detail = null;
   refreshView('explorer'); refreshView('content'); refreshView('property');
-  try { state.logs = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(key) + '/logs') || []; } catch { state.logs = []; }
+  try { state.logs = await apiJson('/api/rules/v1/decisions/' + encodeURIComponent(key) + '/logs') || []; } catch (e) { state.logs = []; console.warn('装载执行日志失败', e); flash('装载执行日志失败: ' + (e.message || e), true); }
   refreshView('content');
 }
 async function selectLog(id) {
   state.selectedLog = id; state.detail = null; refreshView('content'); refreshView('property');
-  try { state.detail = await apiJson('/api/rules/v1/logs/' + encodeURIComponent(id)); } catch { /* */ }
+  try { state.detail = await apiJson('/api/rules/v1/logs/' + encodeURIComponent(id)); } catch (e) { console.warn('装载日志明细失败', e); flash('装载日志明细失败: ' + (e.message || e), true); }
   refreshView('property');
+}
+
+/** 轻提示（与 design-workbench.js 的 flash 同实现副本，native 页无模块共享，改动须同步）。 */
+function flash(msg, err) {
+  try {
+    const el = document.createElement('div');
+    el.textContent = msg;
+    el.style.cssText = `position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:9999;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;background:${err ? '#d9534f' : '#2e7d5b'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2200);
+  } catch { /* 无 document */ }
 }
 
 function hostRoot(host) { return host?.renderRoot || host?.shadowRoot?.querySelector('.rl') || host; }

@@ -6,7 +6,7 @@
 
 use crate::engine::store;
 use crate::resp::{ApiResp, Result, RuleError};
-use crate::tenant::{current_tenant, current_user};
+use crate::tenant::{current_display_user, current_tenant};
 use axum::extract::Path;
 use axum::Json;
 use chrono::Utc;
@@ -227,7 +227,7 @@ async fn run_and_respond(
             output: result.output.clone(),
             trace: json!(result.trace),
             timing_us: elapsed_us,
-            caller: current_user(),
+            caller: current_display_user(),
             failure: failure.clone(),
             created_at: started,
         };
@@ -443,7 +443,7 @@ pub struct ScriptEvalReq {
 /// POST /definitions/{key}/publish —— 发布当前草稿 → 不可变 release + version+1。
 pub async fn publish_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> {
     let version = store()
-        .publish(&key, current_user())
+        .publish(&key, current_display_user())
         .await
         .map_err(|e| RuleError::business(format!("发布失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "published": true }))))

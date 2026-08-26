@@ -18,7 +18,11 @@ task_local! {
 #[derive(Debug, Clone)]
 pub struct TenantCtx {
     pub tenant: String,
+    /// 当前用户 id（JWT sub；可空）。授权比对用此。
     pub user: Option<String>,
+    /// 当前用户名（JWT `username` claim；可空——旧令牌/第三方精简令牌无）。留痕/审计
+    /// 展示用 [`current_display_user`] 取「用户名优先、id 兜底」，勿拿 user 直接当姓名。
+    pub username: Option<String>,
     pub roles: Vec<String>,
 }
 
@@ -27,11 +31,16 @@ impl TenantCtx {
         Self {
             tenant: tenant.into(),
             user: None,
+            username: None,
             roles: Vec::new(),
         }
     }
     pub fn with_user(mut self, user: Option<String>) -> Self {
         self.user = user;
+        self
+    }
+    pub fn with_username(mut self, username: Option<String>) -> Self {
+        self.username = username;
         self
     }
     pub fn with_roles(mut self, roles: Vec<String>) -> Self {
@@ -58,6 +67,20 @@ pub fn current_tenant() -> String {
 /// 当前用户 id。
 pub fn current_user() -> Option<String> {
     TENANT.try_with(|c| c.user.clone()).ok().flatten()
+}
+
+/// 留痕/审计展示用操作人名：优先 `username` claim（如 "admin"），无则回退用户 id——
+/// 平台 AccessClaims 自带 `username`，旧令牌/第三方精简令牌缺省时退 id 保证不空。
+pub fn current_display_user() -> Option<String> {
+    TENANT
+        .try_with(|c| {
+            c.username
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| c.user.clone())
+        })
+        .ok()
+        .flatten()
 }
 
 /// 当前用户角色。

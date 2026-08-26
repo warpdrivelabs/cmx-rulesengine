@@ -97,7 +97,8 @@ async fn main() -> cmx_web_chassis::Result<()> {
         .state(())
         // 钩子① 注册数据源——平台封装：BaseConfig（标准 [[databases]] 段，ConfigManager 三源
         // 合并）+ 共享注册原语 register_pg_datasources。要求 db_id = RULE_DB_ID（store 按该
-        // db_id 寻址）；缺段 / 缺 db_id 启动失败（无内置 URL 兜底）。
+        // db_id 寻址）；缺段 / 缺 db_id 启动失败（无内置 URL 兜底）。注册建池即首连验证——
+        // 库不可达同样终止启动（fail-fast）。
         .init("datasources", |_meta| {
             Box::pin(async {
                 let base = cmx_service_base::BaseConfig::from_config_manager()
@@ -120,12 +121,13 @@ async fn main() -> cmx_web_chassis::Result<()> {
                 Ok(())
             })
         })
-        // 钩子② 建表预热（**无 poller**）。非致命：DB/schema 不可用只 warn，服务仍起。
+        // 钩子② 建表预热（**无 poller**）。DB 不可达已在钩子① 探活 fail-fast；此处失败
+        //（建表权限等）同样终止启动——带病启动端点只会全返错。
         .init("store", |_meta| {
             Box::pin(async {
-                if let Err(e) = warm_store().await {
-                    tracing::warn!(error = %e, "决策存储初始化失败（DB/schema 不可用？端点将返错）");
-                }
+                warm_store()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("决策存储初始化失败: {e}"))?;
                 Ok(())
             })
         });

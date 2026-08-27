@@ -1,106 +1,15 @@
-//! 平台中立的响应信封 + 错误类型（字节对齐 cmx-api-types 的 {code,msg,data}，抽核后平台输出零变化）。
+//! 平台中立的响应信封 + 错误类型——已收编至 cmx-api-types（经 `cmx_engine_kit::resp`
+//! re-export，唯一真源）。
 //!
-//! 与 cmx-flow-app::resp 同构：本 crate 不依赖 cmx-api-types，自持等价定义。
-//! - `ApiResp<T>`：`{code,msg,data}` camelCase，`data` 为 None 时不序列化。
-//! - `RuleError`：Business → HTTP 200 + code=1；NotFound → 404 + code=4；Internal → 500 + code=5。
+//! 受控变更（已拍板 2-B）：错误 code 值域从本 crate 自持的 1/4/5 迁至 api-types 的
+//! 1/404/500——Business 不变；NotFound 4→404、Internal 5→500（HTTP 状态码均不变，
+//! 仅 body 的 code 值对齐平台）。PageServeError 本地桥已删（cmx-form 内置 api-types
+//! 转换：BadRequest→400、Io→500）。
+//!
+//! handlers 构造器替换基线：`business`→`business_error` 13 处、`internal`→`internal_error`
+//! 22 处（not_found 9 同名零改）。
 
-use axum::Json;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use serde::Serialize;
-use serde_json::json;
+pub use cmx_engine_kit::resp::{ApiResp, Result};
 
-/// 统一响应信封（对齐 cmx-api-types::ApiResp，去掉本模块用不到的 pagination）。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiResp<T> {
-    pub code: u16,
-    pub msg: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<T>,
-}
-
-impl<T> ApiResp<T> {
-    pub fn ok(data: T) -> Self {
-        Self {
-            code: 0,
-            msg: "success".to_string(),
-            data: Some(data),
-        }
-    }
-}
-
-/// 平台中立错误。
-#[derive(Debug, Clone)]
-pub enum RuleError {
-    /// 业务错误（HTTP 200 + code=1）。
-    Business(String),
-    /// 资源不存在（HTTP 404 + code=4）。
-    NotFound(String),
-    /// 兜底内部错误（HTTP 500 + code=5）。
-    Internal(String),
-}
-
-impl RuleError {
-    pub fn business(msg: impl Into<String>) -> Self {
-        Self::Business(msg.into())
-    }
-    pub fn not_found(msg: impl Into<String>) -> Self {
-        Self::NotFound(msg.into())
-    }
-    pub fn internal(msg: impl Into<String>) -> Self {
-        Self::Internal(msg.into())
-    }
-
-    fn code(&self) -> u16 {
-        match self {
-            Self::Business(_) => 1,
-            Self::NotFound(_) => 4,
-            Self::Internal(_) => 5,
-        }
-    }
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::Business(_) => StatusCode::OK,
-            Self::NotFound(_) => StatusCode::NOT_FOUND,
-            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-    fn message(&self) -> &str {
-        match self {
-            Self::Business(m) | Self::NotFound(m) | Self::Internal(m) => m,
-        }
-    }
-}
-
-impl std::fmt::Display for RuleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message())
-    }
-}
-impl std::error::Error for RuleError {}
-
-impl IntoResponse for RuleError {
-    fn into_response(self) -> Response {
-        tracing::error!("{:<12} - RuleError {self:?}", "ERROR");
-        let status = self.status();
-        let body = Json(json!({ "code": self.code(), "msg": self.message() }));
-        (status, body).into_response()
-    }
-}
-
-/// 页面投递内部错误 → 自持信封（保持历史错误体字节：BadRequest→business code=1，
-/// NotFound→404 code=4，与原 native_pages.rs 语义一致）。
-impl From<cmx_form::serve::PageServeError> for RuleError {
-    fn from(e: cmx_form::serve::PageServeError) -> Self {
-        match e {
-            cmx_form::serve::PageServeError::BadRequest(m) => Self::business(m),
-            cmx_form::serve::PageServeError::NotFound(m) => Self::not_found(m),
-            // F3-save 写路径落盘失败：按业务错误透出（code=1）
-            cmx_form::serve::PageServeError::Io(m) => Self::business(m),
-        }
-    }
-}
-
-/// handler 结果别名。
-pub type Result<T> = core::result::Result<T, RuleError>;
+/// 过渡期别名：handlers 既有 `RuleError::xxx` 引用零改动（构造器名已对齐 api-types）。
+pub use cmx_engine_kit::resp::Error as RuleError;

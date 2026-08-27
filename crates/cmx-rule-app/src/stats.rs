@@ -18,7 +18,7 @@ pub async fn list_logs(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> 
         "rule_log_list",
     )
     .await
-    .map_err(|e| RuleError::internal(format!("查询决策日志失败: {e}")))?;
+    .map_err(|e| RuleError::internal_error(format!("查询决策日志失败: {e}")))?;
 
     let schema = ds.schema.as_ref();
     let mut rows = Vec::new();
@@ -59,7 +59,7 @@ pub async fn get_log(Path(id): Path<String>) -> Result<Json<ApiResp<Value>>> {
         "rule_log_one",
     )
     .await
-    .map_err(|e| RuleError::internal(format!("查询决策日志失败: {e}")))?;
+    .map_err(|e| RuleError::internal_error(format!("查询决策日志失败: {e}")))?;
 
     let Some(row) = ds.iter().next() else {
         return Err(RuleError::not_found(format!("决策日志 {id} 不存在")));

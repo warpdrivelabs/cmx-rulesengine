@@ -26,6 +26,8 @@ cmx-service-base = { workspace = true, default-features = false }
 cmx-utils = { workspace = true }
 # 页面只读投递（native-pages 三端点通用路由，替代原 native_pages.rs；错误体经 RuleError 渲染）
 cmx-form = { workspace = true }
+# 引擎应用层横切件：tenant 上下文唯一真源（本仓 src/tenant.rs 已缩为 re-export shim）
+cmx-engine-kit = { workspace = true }
 
 axum = { workspace = true }
 serde = { workspace = true }

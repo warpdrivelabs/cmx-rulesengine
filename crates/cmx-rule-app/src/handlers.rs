@@ -22,7 +22,7 @@ pub async fn list_definitions() -> Result<Json<ApiResp<Value>>> {
     let metas = store()
         .list_definitions(&tenant)
         .await
-        .map_err(|e| RuleError::internal(format!("列出定义失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("列出定义失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(metas))))
 }
 
@@ -32,7 +32,7 @@ pub async fn get_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Valu
     let def = store()
         .load_definition(&tenant, &key)
         .await
-        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .map_err(|e| RuleError::internal_error(format!("装载定义失败: {e}")))?
         .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
     Ok(Json(ApiResp::ok(json!(def))))
 }
@@ -40,13 +40,13 @@ pub async fn get_definition(Path(key): Path<String>) -> Result<Json<ApiResp<Valu
 /// POST /definitions/draft —— 存草稿（结构校验后 upsert）。
 pub async fn save_draft(Json(def): Json<DecisionDef>) -> Result<Json<ApiResp<Value>>> {
     def.validate()
-        .map_err(|e| RuleError::business(format!("决策定义非法: {e}")))?;
-    check_scripts(&def).map_err(RuleError::business)?;
+        .map_err(|e| RuleError::business_error(format!("决策定义非法: {e}")))?;
+    check_scripts(&def).map_err(RuleError::business_error)?;
     let tenant = current_tenant();
     store()
         .save_definition(&tenant, &def)
         .await
-        .map_err(|e| RuleError::internal(format!("保存草稿失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("保存草稿失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "key": def.key, "saved": true }))))
 }
 
@@ -58,20 +58,20 @@ pub async fn list_categories() -> Result<Json<ApiResp<Value>>> {
     let cats = store()
         .list_categories(&tenant)
         .await
-        .map_err(|e| RuleError::internal(format!("列出分类失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("列出分类失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(cats))))
 }
 
 /// POST /categories —— upsert 一个分类（按 code）。
 pub async fn save_category(Json(cat): Json<RuleCategory>) -> Result<Json<ApiResp<Value>>> {
     if cat.code.trim().is_empty() {
-        return Err(RuleError::business("分类 code 不能为空".to_string()));
+        return Err(RuleError::business_error("分类 code 不能为空".to_string()));
     }
     let tenant = current_tenant();
     store()
         .save_category(&tenant, &cat)
         .await
-        .map_err(|e| RuleError::internal(format!("保存分类失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("保存分类失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "code": cat.code, "saved": true }))))
 }
 
@@ -81,7 +81,7 @@ pub async fn delete_category(Path(code): Path<String>) -> Result<Json<ApiResp<Va
     store()
         .delete_category(&tenant, &code)
         .await
-        .map_err(|e| RuleError::internal(format!("删除分类失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("删除分类失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "code": code, "deleted": true }))))
 }
 
@@ -174,7 +174,7 @@ pub async fn evaluate_by_key(
     let def = store()
         .load_definition(&tenant, &key)
         .await
-        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .map_err(|e| RuleError::internal_error(format!("装载定义失败: {e}")))?
         .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
     run_and_respond(&tenant, def, req).await
 }
@@ -185,9 +185,9 @@ pub async fn evaluate_inline(Json(req): Json<EvaluateReq>) -> Result<Json<ApiRes
     let def = req
         .definition
         .clone()
-        .ok_or_else(|| RuleError::business("内联求值需提供 definition"))?;
+        .ok_or_else(|| RuleError::business_error("内联求值需提供 definition"))?;
     def.validate()
-        .map_err(|e| RuleError::business(format!("决策定义非法: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("决策定义非法: {e}")))?;
     // 内联求值默认不落库。
     let mut req = req;
     req.options.log = false;
@@ -267,7 +267,7 @@ pub struct FeelEvalReq {
 pub async fn feel_eval(Json(req): Json<FeelEvalReq>) -> Result<Json<ApiResp<Value>>> {
     let ctx = req.context.unwrap_or_else(|| json!({}));
     let r = cmx_rule_feel::eval_unary_test(&req.test, &req.value, &ctx)
-        .map_err(|e| RuleError::business(format!("表达式错误: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("表达式错误: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "result": r }))))
 }
 
@@ -284,7 +284,7 @@ pub struct FeelExprReq {
 pub async fn feel_expression(Json(req): Json<FeelExprReq>) -> Result<Json<ApiResp<Value>>> {
     let ctx = req.context.unwrap_or_else(|| json!({}));
     let v = cmx_rule_feel::eval_expression(&req.expression, &ctx)
-        .map_err(|e| RuleError::business(format!("表达式错误: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("表达式错误: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "result": v }))))
 }
 
@@ -367,7 +367,7 @@ pub async fn list_functions() -> Result<Json<ApiResp<Value>>> {
     let list = store()
         .list_functions()
         .await
-        .map_err(|e| RuleError::internal(format!("列出脚本函数失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("列出脚本函数失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(list))))
 }
 
@@ -376,7 +376,7 @@ pub async fn get_function(Path(name): Path<String>) -> Result<Json<ApiResp<Value
     let f = store()
         .get_function(&name)
         .await
-        .map_err(|e| RuleError::internal(format!("装载脚本函数失败: {e}")))?
+        .map_err(|e| RuleError::internal_error(format!("装载脚本函数失败: {e}")))?
         .ok_or_else(|| RuleError::not_found(format!("脚本函数 {name} 不存在")))?;
     Ok(Json(ApiResp::ok(json!(f))))
 }
@@ -384,16 +384,16 @@ pub async fn get_function(Path(name): Path<String>) -> Result<Json<ApiResp<Value
 /// POST /functions/draft —— 存草稿（含 Rhai 编译校验）。
 pub async fn save_function(Json(f): Json<cmx_rule_model::ScriptFunction>) -> Result<Json<ApiResp<Value>>> {
     if f.name.trim().is_empty() {
-        return Err(RuleError::business("脚本函数名不可为空"));
+        return Err(RuleError::business_error("脚本函数名不可为空"));
     }
     // 编译校验（把函数体包装成 fn 声明后 compile，暴露语法错带行号）。
     let sf = cmx_rule_feel::ScriptFn::from_parts(&f.name, &f.params, &f.body);
     cmx_rule_feel::check_script(&sf.source)
-        .map_err(|e| RuleError::business(format!("脚本函数语法错误: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("脚本函数语法错误: {e}")))?;
     store()
         .save_function(&f)
         .await
-        .map_err(|e| RuleError::internal(format!("保存脚本函数失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("保存脚本函数失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "name": f.name, "saved": true }))))
 }
 
@@ -402,7 +402,7 @@ pub async fn publish_function(Path(name): Path<String>) -> Result<Json<ApiResp<V
     let version = store()
         .publish_function(&name)
         .await
-        .map_err(|e| RuleError::business(format!("发布脚本函数失败: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("发布脚本函数失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "name": name, "version": version, "published": true }))))
 }
 
@@ -411,7 +411,7 @@ pub async fn delete_function(Path(name): Path<String>) -> Result<Json<ApiResp<Va
     let n = store()
         .delete_function(&name)
         .await
-        .map_err(|e| RuleError::internal(format!("删除脚本函数失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("删除脚本函数失败: {e}")))?;
     if n == 0 {
         return Err(RuleError::not_found(format!("脚本函数 {name} 不存在")));
     }
@@ -424,7 +424,7 @@ pub async fn script_eval(Json(req): Json<ScriptEvalReq>) -> Result<Json<ApiResp<
     let tenant = current_tenant();
     let funcs = load_script_functions(&tenant).await;
     let out = cmx_rule_feel::with_functions(funcs, || cmx_rule_feel::eval_script(&req.script, &ctx))
-        .map_err(|e| RuleError::business(format!("脚本错误: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("脚本错误: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "result": out }))))
 }
 
@@ -445,7 +445,7 @@ pub async fn publish_definition(Path(key): Path<String>) -> Result<Json<ApiResp<
     let version = store()
         .publish(&key, current_display_user())
         .await
-        .map_err(|e| RuleError::business(format!("发布失败: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("发布失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "published": true }))))
 }
 
@@ -454,7 +454,7 @@ pub async fn delete_definition(Path(key): Path<String>) -> Result<Json<ApiResp<V
     let deleted = store()
         .delete_definition(&key)
         .await
-        .map_err(|e| RuleError::internal(format!("删除失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("删除失败: {e}")))?;
     if deleted == 0 {
         return Err(RuleError::not_found(format!("决策 {key} 不存在")));
     }
@@ -466,7 +466,7 @@ pub async fn list_versions(Path(key): Path<String>) -> Result<Json<ApiResp<Value
     let versions = store()
         .list_versions(&key)
         .await
-        .map_err(|e| RuleError::internal(format!("查询版本失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("查询版本失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(versions))))
 }
 /// POST /definitions/{key}/versions/{v}/activate —— 激活某版本。
@@ -476,7 +476,7 @@ pub async fn activate_version(
     store()
         .activate_version(&key, version)
         .await
-        .map_err(|e| RuleError::business(format!("激活失败: {e}")))?;
+        .map_err(|e| RuleError::business_error(format!("激活失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "key": key, "version": version, "active": true }))))
 }
 
@@ -491,7 +491,7 @@ pub async fn simulate_by_key(
     let def = store()
         .load_definition(&tenant, &key)
         .await
-        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .map_err(|e| RuleError::internal_error(format!("装载定义失败: {e}")))?
         .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
     req.options.log = false;
     req.options.trace = true;
@@ -519,7 +519,7 @@ pub async fn analyze_decision(
             store()
                 .load_definition(&tenant, &key)
                 .await
-                .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+                .map_err(|e| RuleError::internal_error(format!("装载定义失败: {e}")))?
                 .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?
         }
     };
@@ -539,7 +539,7 @@ pub async fn list_tests(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>>
     let tests = store()
         .list_tests(&key)
         .await
-        .map_err(|e| RuleError::internal(format!("查询测试用例失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("查询测试用例失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!(tests))))
 }
 
@@ -569,7 +569,7 @@ pub async fn save_test(
     store()
         .save_test(&tc)
         .await
-        .map_err(|e| RuleError::internal(format!("保存测试用例失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("保存测试用例失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "id": tc.id, "saved": true }))))
 }
 
@@ -578,7 +578,7 @@ pub async fn delete_test(Path((_key, id)): Path<(String, String)>) -> Result<Jso
     store()
         .delete_test(&id)
         .await
-        .map_err(|e| RuleError::internal(format!("删除测试用例失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("删除测试用例失败: {e}")))?;
     Ok(Json(ApiResp::ok(json!({ "id": id, "deleted": true }))))
 }
 
@@ -588,12 +588,12 @@ pub async fn run_tests(Path(key): Path<String>) -> Result<Json<ApiResp<Value>>> 
     let def = store()
         .load_definition(&tenant, &key)
         .await
-        .map_err(|e| RuleError::internal(format!("装载定义失败: {e}")))?
+        .map_err(|e| RuleError::internal_error(format!("装载定义失败: {e}")))?
         .ok_or_else(|| RuleError::not_found(format!("决策 {key} 不存在")))?;
     let tests = store()
         .list_tests(&key)
         .await
-        .map_err(|e| RuleError::internal(format!("查询测试用例失败: {e}")))?;
+        .map_err(|e| RuleError::internal_error(format!("查询测试用例失败: {e}")))?;
 
     let mut passed = 0usize;
     let mut cases = Vec::new();

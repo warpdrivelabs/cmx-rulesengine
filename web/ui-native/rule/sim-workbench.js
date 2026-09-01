@@ -322,7 +322,7 @@ function styleCss() {
   .np-empty,.np-placeholder{color:var(--dg-faint);padding:22px 10px;text-align:center;font-size:12px}
   .np-btn{border:1px solid var(--dg-border-strong);background:var(--dg-surface);color:var(--dg-accent);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:border-color .14s,box-shadow .14s,background .14s}
   .np-btn:hover{border-color:var(--dg-accent);box-shadow:var(--dg-glow)}
-  .np-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color:#fff;border-color:transparent}
+  .np-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color: #fff;border-color:transparent}
   .np-btn.primary:hover{box-shadow:var(--dg-glow);filter:brightness(1.06)}
   .np-btn.xs{padding:3px 9px;font-size:11px}
   .np-btn.ghost{border-color:var(--dg-border);color:var(--dg-muted);background:transparent}

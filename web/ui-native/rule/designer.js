@@ -30,13 +30,8 @@ function getInst(ctx) {
   return st;
 }
 
-async function apiJson(url, options = {}) {
-  const full = (CFG.apiBase && url.charAt(0) === '/') ? CFG.apiBase + url : url;
-  const res = await fetch(full, { ...CFG.fetchInit, ...options, headers: { Accept: 'application/json', ...CFG.authHeaders(), ...(options.headers || {}) } });
-  let j = null; try { j = await res.json(); } catch { /* */ }
-  if (!res.ok || (j && typeof j.code === 'number' && j.code !== 0)) throw new Error((j && (j.msg || j.error)) || `HTTP ${res.status}`);
-  return j && typeof j === 'object' && 'data' in j ? j.data : j;
-}
+const { apiJson: _sharedApiJson } = globalThis.__cmxDataComp // 共享 fetch 封装（cmx-data-comp/lib/cmx-page-helpers.js）；经 CFG 转发保留组件壳 configure() 契约
+async function apiJson (url, options = {}) { return _sharedApiJson(url, options, CFG) }
 
 // ── 数据 ──
 async function loadDef(st) {
@@ -258,7 +253,7 @@ function flash(msg, err) {
     el.style.cssText = `position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;background:${err ? '#d9534f' : '#2e7d5b'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
     document.body.appendChild(el); setTimeout(() => el.remove(), 2200); } catch { /* */ }
 }
-function esc(s) { return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+const { escHtml: esc } = globalThis.__cmxDataComp // 共享转义（cmx-data-comp/lib/cmx-page-helpers.js；最严格五字符集合，文本/属性上下文皆安全）
 
 function css() {
   return `

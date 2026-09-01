@@ -44,13 +44,8 @@ function focusSearch(pos) {
   requestAnimationFrame(() => { for (const h of state.hosts) { if (h.__view === 'explorer') { const inp = hostRoot(h)?.querySelector?.('#rl-search'); if (inp) { inp.focus(); const p = pos == null ? inp.value.length : pos; try { inp.setSelectionRange(p, p); } catch { /* */ } } } } });
 }
 
-async function apiJson(url, options = {}) {
-  const full = (CFG.apiBase && url.charAt(0) === '/') ? CFG.apiBase + url : url;
-  const res = await fetch(full, { ...CFG.fetchInit, ...options, headers: { Accept: 'application/json', ...CFG.authHeaders(), ...(options.headers || {}) } });
-  let j = null; try { j = await res.json(); } catch { /* */ }
-  if (!res.ok || (j && typeof j.code === 'number' && j.code !== 0)) throw new Error((j && (j.msg || j.error)) || `HTTP ${res.status}`);
-  return j && typeof j === 'object' && 'data' in j ? j.data : j;
-}
+const { apiJson: _sharedApiJson } = globalThis.__cmxDataComp // 共享 fetch 封装（cmx-data-comp/lib/cmx-page-helpers.js）；经 CFG 转发保留组件壳 configure() 契约
+async function apiJson (url, options = {}) { return _sharedApiJson(url, options, CFG) }
 
 async function loadList() { try { const [list, cats] = await Promise.all([apiJson('/api/rules/v1/definitions'), apiJson('/api/rules/v1/categories').catch(() => [])]); state.list = list || []; state.categories = cats || []; } catch (e) { state.list = []; console.warn('装载决策集失败', e); flash('装载决策集失败: ' + (e.message || e), true); } refreshView('explorer'); }
 async function selectDecision(key) {
@@ -174,7 +169,7 @@ function bind(root, view) {
 
 function fmtTime(s) { if (!s) return '—'; try { return String(s).replace('T', ' ').replace(/\.\d+.*/, ''); } catch { return String(s); } }
 function shortObj(o) { try { const s = typeof o === 'string' ? o : JSON.stringify(o); return s && s.length > 36 ? s.slice(0, 36) + '…' : (s || 'null'); } catch { return 'null'; } }
-function esc(s) { return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+const { escHtml: esc } = globalThis.__cmxDataComp // 共享转义（cmx-data-comp/lib/cmx-page-helpers.js；最严格五字符集合，文本/属性上下文皆安全）
 
 function css() {
   return `

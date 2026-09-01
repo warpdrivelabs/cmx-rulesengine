@@ -54,6 +54,7 @@ function groupedList() {
 // ── 信封解包 fetch ──
 const { apiJson: _sharedApiJson } = globalThis.__cmxDataComp // 共享 fetch 封装（cmx-data-comp/lib/cmx-page-helpers.js）；经 CFG 转发保留组件壳 configure() 契约
 async function apiJson (url, options = {}) { return _sharedApiJson(url, options, CFG) }
+const { cmxConfirm } = globalThis.__cmxDataComp // 共享确认弹窗（cmx-data-comp/lib/cmx-message-dialog.js；审查 A-03 替换原生 confirm）
 
 // ── 数据加载 ──
 async function loadList() {
@@ -132,7 +133,7 @@ async function createDecision(root) {
 async function deleteDecision(key) {
   const d = state.list.find(x => x.key === key);
   const label = d ? (d.name || d.key) : key;
-  if (!confirm(`确认删除决策集「${label}」？\n将连同其发布版本、决策日志、测试用例一并永久删除，不可恢复。`)) return;
+  if (!await cmxConfirm({ message: `确认删除决策集「${label}」？\n将连同其发布版本、决策日志、测试用例一并永久删除，不可恢复。`, intent: 'danger', confirmText: '删除' })) return;
   try {
     await apiJson('/api/rules/v1/definitions/' + encodeURIComponent(key), { method: 'DELETE' });
   } catch (e) { flash('删除失败: ' + e.message, true); return; }
@@ -186,7 +187,7 @@ async function catMove(code, dir) {
 }
 async function catDelete(code) {
   const c = (state.categories || []).find(x => x.code === code);
-  if (!confirm(`确认删除分类「${c ? (c.name || c.code) : code}」？\n引用它的决策集将归入「未分类」。`)) return;
+  if (!await cmxConfirm({ message: `确认删除分类「${c ? (c.name || c.code) : code}」？\n引用它的决策集将归入「未分类」。`, intent: 'danger', confirmText: '删除' })) return;
   try { await apiJson('/api/rules/v1/categories/' + encodeURIComponent(code), { method: 'DELETE' }); }
   catch (e) { flash('删除分类失败: ' + e.message, true); return; }
   await loadList(); flash('已删除分类');

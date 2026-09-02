@@ -65,7 +65,7 @@ function flash(msg, err) {
   try {
     const el = document.createElement('div');
     el.textContent = msg;
-    el.style.cssText = `position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:9999;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;background:${err ? '#d9534f' : '#2e7d5b'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
+    el.style.cssText = `position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:9999;padding:10px 18px;border-radius:8px;font-size:13px;color:var(--sapGroup_ContentBorderColor, #ffffff);background:${err ? 'var(--sapNegativeElementColor, #d9534f)' : 'var(--sapPositiveElementColor, #2e7d5b)'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2200);
   } catch { /* 无 document */ }

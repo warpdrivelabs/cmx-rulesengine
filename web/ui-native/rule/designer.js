@@ -250,7 +250,7 @@ async function validateFx(root, expr) {
 
 function flash(msg, err) {
   try { const el = document.createElement('div'); el.textContent = msg;
-    el.style.cssText = `position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;background:${err ? '#d9534f' : '#2e7d5b'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
+    el.style.cssText = `position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-size:13px;color:var(--sapGroup_ContentBorderColor, #ffffff);background:${err ? 'var(--sapNegativeElementColor, #d9534f)' : 'var(--sapPositiveElementColor, #2e7d5b)'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
     document.body.appendChild(el); setTimeout(() => el.remove(), 2200); } catch { /* */ }
 }
 const { escHtml: esc } = globalThis.__cmxDataComp // 共享转义（cmx-data-comp/lib/cmx-page-helpers.js；最严格五字符集合，文本/属性上下文皆安全）
@@ -285,8 +285,8 @@ function css() {
   .rd-hp:focus{outline:none;border-color:var(--dg-accent);box-shadow:0 0 0 3px var(--dg-accent-soft)}
   .rd-btn{border:1px solid var(--dg-border-strong);background:var(--dg-surface);color:var(--dg-accent);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;transition:border-color .14s,box-shadow .14s}
   .rd-btn:hover{border-color:var(--dg-accent);box-shadow:var(--dg-glow)}
-  .rd-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color:#fff;border-color:transparent}
-  .rd-btn.ok{background:linear-gradient(135deg,var(--dg-ok),color-mix(in srgb,var(--dg-ok) 60%,#00d0c0));color:#fff;border-color:transparent}
+  .rd-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color: #fff;border-color:transparent}
+  .rd-btn.ok{background:linear-gradient(135deg,var(--dg-ok),color-mix(in srgb,var(--dg-ok) 60%,#00d0c0));color: #fff;border-color:transparent}
   .rd-btn.xs{padding:3px 9px;font-size:11px}
   .rd-gridwrap{overflow:auto;border:1px solid var(--dg-border);border-radius:11px}
   .rd-grid{border-collapse:collapse;width:100%;font-size:12px}

@@ -252,7 +252,7 @@ function bind(root, st, view) {
 function shortObj(o) { try { const s = JSON.stringify(o); return s.length > 40 ? s.slice(0, 40) + '…' : s; } catch { return ''; } }
 function flash(msg, err) {
   try { const el = document.createElement('div'); el.textContent = msg;
-    el.style.cssText = `position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;background:${err ? '#d9534f' : '#2e7d5b'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
+    el.style.cssText = `position:fixed;left:50%;bottom:34px;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-size:13px;color:var(--sapGroup_ContentBorderColor, #ffffff);background:${err ? 'var(--sapNegativeElementColor, #d9534f)' : 'var(--sapPositiveElementColor, #2e7d5b)'};box-shadow:0 4px 16px rgba(0,0,0,.25)`;
     document.body.appendChild(el); setTimeout(() => el.remove(), 2200); } catch { /* */ }
 }
 const { escHtml: esc } = globalThis.__cmxDataComp // 共享转义（cmx-data-comp/lib/cmx-page-helpers.js；最严格五字符集合，文本/属性上下文皆安全）
@@ -293,7 +293,7 @@ function css() {
   .rs-rawhint{font-size:10px;color:var(--dg-faint);margin-top:3px}
   .rs-btn{border:1px solid var(--dg-border-strong);background:var(--dg-surface);color:var(--dg-accent);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:border-color .14s,box-shadow .14s}
   .rs-btn:hover{border-color:var(--dg-accent);box-shadow:var(--dg-glow)}
-  .rs-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color:#fff;border-color:transparent}
+  .rs-btn.primary{background:linear-gradient(135deg,var(--dg-accent),var(--dg-accent2));color: #fff;border-color:transparent}
   .rs-btn.primary:hover{filter:brightness(1.06)}.rs-btn.xs{padding:3px 9px;font-size:11px}
   .rs-btn:disabled{opacity:.4;cursor:default;box-shadow:none}
   .rs-actions{margin-top:12px;display:flex;gap:8px}

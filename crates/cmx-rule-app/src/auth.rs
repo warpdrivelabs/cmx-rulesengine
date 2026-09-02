@@ -17,6 +17,8 @@ use axum::response::Response;
 
 use cmx_engine_kit::auth::jwt::{self, JwtSpec};
 
+pub use cmx_engine_kit::auth::jwt::auth_config_warmup;
+
 /// 本仓专属参数：无 SSE 票据路径（rule 无 EventSource 端点）。
 static SPEC: JwtSpec = JwtSpec::new("rules", &[], None);
 

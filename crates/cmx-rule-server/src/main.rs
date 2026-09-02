@@ -100,6 +100,8 @@ async fn main() -> cmx_web_chassis::Result<()> {
         // db_id 寻址）；缺段 / 缺 db_id 启动失败（无内置 URL 兜底）。注册建池即首连验证——
         // 库不可达同样终止启动（fail-fast）。
         .init("datasources", |_meta| {
+            // 004 小项 fail-fast：auth.mode 缺失/非法在启动期即失败（无鉴权必须是显式 off）。
+            cmx_rule_app::auth::auth_config_warmup();
             Box::pin(async {
                 let base = cmx_service_base::BaseConfig::from_config_manager()
                     .map_err(|e| anyhow::anyhow!("读取 [[databases]] 配置失败: {e}"))?;

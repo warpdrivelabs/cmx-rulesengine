@@ -1,0 +1,21 @@
+# E2E 本地覆盖配置（CONFIG_FILE 指定）· cmx-rule-server · 指向本机容器 PG
+[server]
+host = "0.0.0.0"
+port = 8094
+log_dir = "logs"
+log_level = "info"
+graceful_timeout_secs = 10
+
+[[databases]]
+db_id = "rule_pg"
+db_name = "规则引擎库(E2E)"
+db_type = "postgres"
+db_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"
+default = true
+
+[auth]
+mode = "off"
+
+[assets]
+ui_native_dir = "../cmx-container/assets/rules/web/ui-native"
+ui_html_dir = "../cmx-container/assets/rules/web/ui-html"

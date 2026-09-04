@@ -167,7 +167,10 @@ function bind(root, view) {
   });
 }
 
-function fmtTime(s) { if (!s) return '—'; try { return String(s).replace('T', ' ').replace(/\.\d+.*/, ''); } catch { return String(s); } }
+/* 时间显示统一走 cmx-shared 注册的 globalThis.cmx.datetime（转当前时区，禁截取 ISO 串）；
+   宿主未装配共享层时降级显示 ISO 原文。 */
+const __CMX_DT = (typeof globalThis !== 'undefined' && globalThis.cmx && globalThis.cmx.datetime) || null
+function fmtTime(s) { return __CMX_DT ? __CMX_DT.fmtDateTime(s, { empty: '—' }) : (s ? String(s) : '—') }
 function shortObj(o) { try { const s = typeof o === 'string' ? o : JSON.stringify(o); return s && s.length > 36 ? s.slice(0, 36) + '…' : (s || 'null'); } catch { return 'null'; } }
 const { escHtml: esc } = globalThis.__cmxDataComp // 共享转义（cmx-data-comp/lib/cmx-page-helpers.js；最严格五字符集合，文本/属性上下文皆安全）
 

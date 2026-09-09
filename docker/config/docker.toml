@@ -1,0 +1,26 @@
+# cmx-rule-server 容器配置模板（挂载覆盖 /app/config；数据库为占位地址）
+# 宿主侧服务用 host.docker.internal（docker run 需 --add-host=...:host-gateway）。
+
+[server]
+host = "0.0.0.0"
+port = 8094
+log_dir = "logs"
+log_level = "info"
+graceful_timeout_secs = 10
+
+# 规则引擎运行库（决策定义/发布/决策日志/测试用例）；R0 复用 flow 的 fico 库
+[[databases]]
+db_id = "rule_pg"
+db_name = "规则引擎库"
+db_type = "postgres"
+db_url = "postgres://postgres:postgres@host.docker.internal:5432/cmx_fico"
+default = true
+
+# off = 不认证（单租户零回归）；生产务必 jwt
+[auth]
+mode = "off"
+
+# 页面资产（镜像内随包 cmx-container/assets/rules）
+[assets]
+ui_native_dir = "/app/assets/rules/web/ui-native"
+ui_html_dir = "/app/assets/rules/web/ui-html"

@@ -17,7 +17,7 @@ graceful_timeout_secs = 10
 db_id = "rule_pg"
 db_name = "规则引擎库"
 db_type = "postgres"
-db_url = "postgres://postgres:postgres@127.0.0.1:5433/fico"
+db_url = "postgres://postgres:postgres@127.0.0.1:5432/fico"
 default = true
 
 # —— 认证（[auth] 段，ConfigManager 直读；off = 不认证，单租户零回归）——

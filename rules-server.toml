@@ -23,6 +23,12 @@ default = true
 # —— 认证（[auth] 段，ConfigManager 直读；off = 不认证，单租户零回归）——
 [auth]
 mode = "off"
+# 接受门户反代注入的 M2M API Key（portal-server 的 [service_auth].outgoing_api_key）。
+# engine-kit（cmx-engine-kit/auth）：请求一旦带 X-Api-Key 即强校验，未注册就 401「无效 API Key」——
+# mode=off 也拦，故必须在此登记门户出站 key，否则 /api/rules/* 经门户全部 401、
+# 前端拦截器误判登录失效 → 每次操作规则引擎都被踢回登录页。
+# 格式：逗号分隔 `key:tenant`（省略 :tenant 用默认租户）。
+api_keys = "cmx_sk_dev_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
 
 # —— 页面资产（[assets] 段：引擎自持 native/html 页面投递目录；env 覆盖 ASSETS__UI_NATIVE_DIR/ASSETS__UI_HTML_DIR）——
 [assets]

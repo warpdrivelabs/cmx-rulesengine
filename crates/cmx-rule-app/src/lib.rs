@@ -11,6 +11,7 @@ pub mod auth;
 pub mod dashboard;
 pub mod engine;
 pub mod handlers;
+pub mod module;
 pub mod openapi;
 pub mod resp;
 pub mod stats;
@@ -22,6 +23,10 @@ pub use engine::{warm_store, RULE_DB_ID};
 pub use openapi::rule_openapi;
 pub use resp::{ApiResp, Result, RuleError};
 pub use tenant::{current_tenant, current_user, identity_snapshot};
+
+// 路由装配契约与组合器（真源 cmx-engine-kit；bin 组合根经本 crate 引用，免加依赖）。
+pub use cmx_engine_kit::routes::{ModuleRoutes, ModuleSet};
+pub use module::{RuleCoreModule, RuleV1Module};
 
 use axum::routing::{delete, get, post};
 use axum::Router;
